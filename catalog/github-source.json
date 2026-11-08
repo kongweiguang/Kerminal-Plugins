@@ -1,7 +1,7 @@
 {
   "indexKeyId": "kerminal-examples-2026",
   "id": "kerminal-github",
-  "indexUrl": "https://raw.githubusercontent.com/kongweiguang/Kerminal-Plugins/main/catalog/index.json",
+  "indexUrl": "https://raw.githubusercontent.com/kongweiguang/Kerminal-Plugins/refs/heads/main/catalog/index.json",
   "downloadOrigins": [
     "https://github.com",
     "https://release-assets.githubusercontent.com",
@@ -14,6 +14,6 @@
   "keys": {
     "kerminal-examples-2026": "untrusted comment: minisign public key: 77B8D8CF95390347\nRWRHAzmVz9i4dybg8RQmxYXve/GtXm6e/+FUcDAHXrkFr/NTQrxXpSD9\n"
   },
-  "indexSignatureUrl": "https://raw.githubusercontent.com/kongweiguang/Kerminal-Plugins/main/catalog/index.json.minisig",
+  "indexSignatureUrl": "https://raw.githubusercontent.com/kongweiguang/Kerminal-Plugins/refs/heads/main/catalog/index.json.minisig",
   "name": "Kerminal 插件市场"
 }

@@ -7,7 +7,7 @@
 Kerminal → 设置 → 插件 → 市场。安装后插件仍保留在市场；“已安装”用于管理本机状态。安装、更新、启用、禁用和卸载在正常重启后生效。
 
 - [受信来源配置](catalog/github-source.json)：固定来源 ID、公钥、命名空间和下载来源。
-- [签名目录](https://raw.githubusercontent.com/kongweiguang/Kerminal-Plugins/main/catalog/index.json)及[分离签名](https://raw.githubusercontent.com/kongweiguang/Kerminal-Plugins/main/catalog/index.json.minisig)，保留 [Release 分发](https://github.com/kongweiguang/Kerminal-Plugins/releases/tag/plugins-catalog-v1)。
+- [签名目录](https://raw.githubusercontent.com/kongweiguang/Kerminal-Plugins/refs/heads/main/catalog/index.json)及[分离签名](https://raw.githubusercontent.com/kongweiguang/Kerminal-Plugins/refs/heads/main/catalog/index.json.minisig)，保留 [Release 分发](https://github.com/kongweiguang/Kerminal-Plugins/releases/tag/plugins-catalog-v1)。
 - [工作台便笺 1.0.0](https://github.com/kongweiguang/Kerminal-Plugins/releases/tag/plugin-workbench-v1.0.0)：Windows x64 原生示例，包含主机类型、便笺 Tab、右栏工具、设置和命令。
 
 来源 ID `kerminal-github` 和公钥沿用原 Kerminal 示例源。新仓库初始目录 sequence 为 2，Raw 镜像目录为 3；1.0.0 包逐字迁移，SHA-256 保持不变。原仓库的旧 release 保留；升级来源地址后继续沿用原身份，不由新来源接管已安装包。新版默认信任审核后的 `kerminal.*` 官方命名空间及历史 `example.workbench`，下载域名包含 `github.com`、`release-assets.githubusercontent.com` 和 `raw.githubusercontent.com`。已有用户保存的来源不会自动扩大信任或改 URL；需在来源管理中核对公钥、命名空间和新地址后明确更新。

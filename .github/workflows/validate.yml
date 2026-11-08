@@ -49,6 +49,10 @@ jobs:
           $tool = if ($IsWindows) { 'target/debug/kerminal-plugin.exe' } else { 'target/debug/kerminal-plugin' }
           [void][IO.Directory]::CreateDirectory('.local')
           node sdk/examples/workbench-demo/build.mjs --native-only --tool (Join-Path $PWD $tool) --out (Join-Path $PWD '.local/workbench-demo.tar')
+      - name: Verify committed signed directory and immutable mirrors
+        run: |
+          $tool = if ($IsWindows) { 'target/debug/kerminal-plugin.exe' } else { 'target/debug/kerminal-plugin' }
+          ./marketplace/validate-catalog.ps1 -PluginToolPath $tool
       - name: Preserve unsigned candidate
         uses: actions/upload-artifact@v4
         with:
