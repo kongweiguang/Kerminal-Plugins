@@ -1,0 +1,7 @@
+* { box-sizing: border-box; }
+body { margin: 0; background: #111b2c; color: #e8edf6; font: 15px system-ui, sans-serif; padding: 28px; }
+h1 { font-size: 23px; margin: 0 0 8px; }
+p { color: #9bacbf; line-height: 1.6; }
+label { display: block; margin: 28px 0 8px; }
+input { width: 100%; padding: 12px; background: #17263e; border: 1px solid #344965; border-radius: 8px; color: inherit; font: inherit; }
+small { display: block; margin-top: 20px; color: #7e96b5; }

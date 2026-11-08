@@ -1,0 +1,4 @@
+[workspace]
+resolver = "3"
+members = ["sdk/protocol", "sdk/rust", "sdk/tools"]
+exclude = ["sdk/examples/workbench-demo"]

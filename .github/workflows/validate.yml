@@ -1,0 +1,56 @@
+name: Validate plugins and SDK
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: plugin-validation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-22.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.98.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: Swatinem/rust-cache@v2
+      - name: Test independent protocol, SDK and package tools
+        run: cargo test --locked --workspace
+      - name: Test frontend and example assets
+        run: |
+          npm --prefix sdk/frontend test
+          node --test sdk/examples/workbench-demo/build.test.mjs sdk/examples/workbench-demo/web.test.mjs
+      - name: Test backend and release recovery
+        run: |
+          cargo test --locked --manifest-path sdk/examples/workbench-demo/Cargo.toml
+          ./marketplace/publish-github.tests.ps1
+      - name: Build unsigned native candidate
+        run: |
+          cargo build --locked -p kerminal-plugin-tools
+          $tool = if ($IsWindows) { 'target/debug/kerminal-plugin.exe' } else { 'target/debug/kerminal-plugin' }
+          [void][IO.Directory]::CreateDirectory('.local')
+          node sdk/examples/workbench-demo/build.mjs --native-only --tool (Join-Path $PWD $tool) --out (Join-Path $PWD '.local/workbench-demo.tar')
+      - name: Preserve unsigned candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-native-${{ runner.os }}
+          path: .local/workbench-demo.tar

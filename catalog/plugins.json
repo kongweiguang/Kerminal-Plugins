@@ -1,0 +1,20 @@
+[
+  {
+    "id": "example.workbench",
+    "name": "工作台便笺示例",
+    "description": "独立原生示例：主机、便笺 Tab、侧栏工具、设置、快捷键和宿主确认框。",
+    "version": "1.0.0",
+    "platforms": [
+      "windows_x86_64"
+    ],
+    "api": {
+      "major": 1,
+      "min_minor": 0
+    },
+    "packageKeyId": "kerminal-examples-2026",
+    "archiveUrl": "https://github.com/kongweiguang/Kerminal-Plugins/releases/download/plugin-workbench-v1.0.0/workbench-demo-1.0.0-windows_x86_64.tar",
+    "signatureUrl": "https://github.com/kongweiguang/Kerminal-Plugins/releases/download/plugin-workbench-v1.0.0/workbench-demo-1.0.0-windows_x86_64.tar.minisig",
+    "sha256": "e2591b4d455dc224d98ed5f5aa2f4332aba3bb737cef271d46eb04f528388c93",
+    "archiveBytes": 475648
+  }
+]

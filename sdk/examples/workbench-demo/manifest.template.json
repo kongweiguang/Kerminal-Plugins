@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "id": "example.workbench",
+  "name": "工作台便笺示例",
+  "version": "1.0.0",
+  "data_version": 1,
+  "api": { "major": 1, "min_minor": 0 },
+  "platforms": ["windows_x86_64"],
+  "permissions": [{ "kind": "ui_dialogs" }, { "kind": "settings_read" }],
+  "entrypoints": {
+    "process": [{ "platform": "windows_x86_64", "path": "bin/backend.exe" }],
+    "views": {
+      "example.workbench.host-form": {
+        "kind": "native",
+        "view": { "root": { "id": "host-form", "kind": "column", "children": [
+          { "id": "label", "kind": "field", "label": "便笺名称", "path": ["label"], "control": "text" },
+          { "id": "host-note", "kind": "notice", "text": "创建一个独立便笺标签页，内容由 Kerminal 保存。此示例不建立远程连接。", "tone": "info" }
+        ] } }
+      },
+      "example.workbench.native-page": {
+        "kind": "native",
+        "view": { "lifecycle": { "activate": true, "visibility": true, "close": true }, "root": { "id": "dashboard", "kind": "group", "title": "工作台便笺", "children": [
+          { "id": "message", "kind": "field", "label": "便笺内容", "path": ["message"], "control": "multiline" },
+          { "id": "confirm", "kind": "button", "label": "测试宿主弹框", "command": "example.workbench.confirm" }
+        ] } }
+      },
+      "example.workbench.web-page": { "kind": "webview", "path": "web/index.html", "bridge_version": 1 },
+      "example.workbench.tool-view": {
+        "kind": "native",
+        "view": { "lifecycle": { "activate": true, "visibility": true, "close": true }, "root": { "id": "tool", "kind": "column", "children": [
+          { "id": "tool-note", "kind": "text", "text": "此工具和便笺页面来自同一个外部插件。可在设置的扩展分组修改初始便笺和确认提示。" },
+          { "id": "confirm", "kind": "button", "label": "测试宿主弹框", "command": "example.workbench.confirm" }
+        ] } }
+      },
+      "example.workbench.settings-view": {
+        "kind": "native",
+        "view": { "root": { "id": "settings", "kind": "column", "children": [
+          { "id": "welcome", "kind": "field", "label": "新便笺初始内容", "path": ["welcome"], "control": "text" },
+          { "id": "compact", "kind": "field", "label": "简短确认提示", "path": ["compact"], "control": "toggle" },
+          { "id": "settings-note", "kind": "notice", "text": "保存后生效。初始内容仅用于下次从主机列表打开的新便笺，已有便笺内容保持原样。", "tone": "info" }
+        ] } }
+      }
+    }
+  },
+  "configuration": {
+    "host_types": {
+      "example.workbench.connection": {
+        "version": 1,
+        "root": { "type": "object", "properties": { "label": { "schema": { "type": "string", "min_length": 1, "max_length": 128 }, "required": true } } },
+        "defaults": { "label": "我的便笺" }
+      }
+    },
+    "settings": {
+      "version": 1,
+      "root": { "type": "object", "properties": {
+        "welcome": { "schema": { "type": "string", "max_length": 128 } },
+        "compact": { "schema": { "type": "boolean" } }
+      } },
+      "defaults": { "welcome": "欢迎使用工作台便笺。", "compact": true }
+    }
+  },
+  "contributions": {
+    "host_types": [{ "id": "example.workbench.host", "name": "工作台便笺", "configuration_type": "example.workbench.connection", "content_type": "example.workbench.dashboard", "form": "example.workbench.host-form" }],
+    "content_types": [
+      { "id": "example.workbench.dashboard", "name": "工作台便笺", "view": "example.workbench.native-page", "kinds": ["page", "tab"], "state": { "version": 1, "root": { "type": "object", "properties": { "message": { "schema": { "type": "string", "max_length": 512 } } } }, "defaults": { "message": "" } } },
+      { "id": "example.workbench.web", "name": "Web dashboard", "view": "example.workbench.web-page", "kinds": ["page", "tab"], "state": { "version": 1, "root": { "type": "object", "properties": { "message": { "schema": { "type": "string", "max_length": 512 } } } }, "defaults": { "message": "" } } }
+    ],
+    "tools": [{ "id": "example.workbench.tool", "name": "便笺示例", "view": "example.workbench.tool-view", "icon": "Settings", "scope": "window", "state": { "version": 1, "root": { "type": "object", "properties": {} }, "defaults": {} } }],
+    "settings_pages": [{ "id": "example.workbench.settings", "name": "工作台便笺示例", "description": "设置新便笺的初始内容及宿主弹框提示。", "keywords": ["示例", "便笺", "确认"], "fields": [{ "id": "welcome", "name": "新便笺初始内容" }, { "id": "compact", "name": "简短确认提示" }], "order": 50, "view": "example.workbench.settings-view" }],
+    "commands": [{ "id": "example.workbench.confirm", "name": "便笺示例：测试宿主弹框", "description": "从插件后端调用 Kerminal 标准确认弹框。", "scope": { "kind": "app" }, "target": "window", "default_keybinding": { "binding": "ctrl-alt-y", "windows": "ctrl-alt-y", "macos": "cmd-alt-y" } }],
+    "placements": [
+      { "command": "example.workbench.confirm", "location": { "kind": "command_palette" }, "group": "example", "order": 0 },
+      { "command": "example.workbench.confirm", "location": { "kind": "tool_header", "id": "example.workbench.tool" }, "group": "example", "order": 0 }
+    ]
+  },
+  "files": [
+    { "path": "bin/backend.exe", "sha256": "", "size": 0 },
+    { "path": "web/index.html", "sha256": "", "size": 0 },
+    { "path": "web/style.css", "sha256": "", "size": 0 },
+    { "path": "web/main.js", "sha256": "", "size": 0 },
+    { "path": "web/sdk.js", "sha256": "", "size": 0 }
+  ]
+}

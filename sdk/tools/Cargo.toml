@@ -1,0 +1,23 @@
+[package]
+name = "kerminal-plugin-tools"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "GPL-3.0-or-later"
+description = "Independent package, signature, verification and catalog tools for Kerminal plugins"
+
+[[bin]]
+name = "kerminal-plugin"
+path = "src/main.rs"
+
+[dependencies]
+kerminal-plugin-protocol = { path = "../protocol", version = "0.1.0" }
+minisign = "=0.7.9"
+minisign-verify = "=0.2.5"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tar = "=0.4.46"
+tempfile = "=3.27.0"
+thiserror = "2"
+url = "=2.5.8"

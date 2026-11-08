@@ -1,0 +1,11 @@
+[package]
+name = "kerminal-plugin-sdk"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "GPL-3.0-or-later"
+description = "Independent stdio backend SDK for Kerminal plugins"
+
+[dependencies]
+kerminal-plugin-protocol = { path = "../protocol", version = "0.1.0" }
+serde_json = "1"

@@ -1,0 +1,10 @@
+/target/
+/.local/
+**/target/
+**/node_modules/
+**/staging/
+**/dist/
+*.key
+*.pem
+*.dpapi
+!sdk/examples/workbench-demo/Cargo.lock

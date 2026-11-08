@@ -1,0 +1,9 @@
+{
+  "name": "@kerminal/plugin-sdk",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": "./index.ts",
+  "scripts": { "test": "node --experimental-strip-types --test tests/bridge.test.ts" },
+  "license": "GPL-3.0-or-later",
+  "engines": { "node": ">=22.6" }
+}

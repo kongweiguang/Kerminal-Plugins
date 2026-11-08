@@ -1,0 +1,17 @@
+{
+  "indexKeyId": "kerminal-examples-2026",
+  "id": "kerminal-github",
+  "indexUrl": "https://github.com/kongweiguang/Kerminal-Plugins/releases/download/plugins-catalog-v1/index.json",
+  "downloadOrigins": [
+    "https://github.com",
+    "https://release-assets.githubusercontent.com"
+  ],
+  "pluginPrefixes": [
+    "example.workbench"
+  ],
+  "keys": {
+    "kerminal-examples-2026": "untrusted comment: minisign public key: 77B8D8CF95390347\nRWRHAzmVz9i4dybg8RQmxYXve/GtXm6e/+FUcDAHXrkFr/NTQrxXpSD9\n"
+  },
+  "indexSignatureUrl": "https://github.com/kongweiguang/Kerminal-Plugins/releases/download/plugins-catalog-v1/index.json.minisig",
+  "name": "Kerminal GitHub 示例"
+}

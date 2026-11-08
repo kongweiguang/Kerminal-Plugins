@@ -1,0 +1,17 @@
+:root { color-scheme: light dark; font-family: var(--kerminal-font-family, system-ui, sans-serif); font-size: var(--kerminal-font-size, 14px); color: var(--kerminal-foreground, CanvasText); background: var(--kerminal-background, Canvas); }
+* { box-sizing: border-box; }
+body { margin: 0; }
+main { width: min(100%, 720px); margin-inline: auto; padding: clamp(20px, 5vw, 56px); }
+.eyebrow { letter-spacing: .1em; font-size: .72rem; color: var(--kerminal-muted-foreground, GrayText); margin: 0 0 12px; }
+h1 { font-size: clamp(1.4rem, 4vw, 2rem); font-weight: 600; letter-spacing: -.025em; margin: 0 0 12px; }
+.description { line-height: 1.65; color: var(--kerminal-muted-foreground, GrayText); margin: 0 0 28px; }
+label { display: block; margin-bottom: 8px; font-weight: 500; }
+textarea { width: 100%; min-height: 150px; resize: vertical; padding: 12px; font: inherit; line-height: 1.6; border: 1px solid var(--kerminal-border, ButtonBorder); border-radius: 8px; background: var(--kerminal-background, Canvas); color: inherit; }
+textarea:focus-visible, button:focus-visible { outline: 2px solid var(--kerminal-accent, Highlight); outline-offset: 3px; }
+.actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+button { min-height: 34px; padding: 7px 14px; font: inherit; border: 1px solid transparent; border-radius: 6px; background: var(--kerminal-primary, Highlight); color: var(--kerminal-primary-foreground, HighlightText); cursor: pointer; }
+button.secondary { background: transparent; color: inherit; border-color: var(--kerminal-border, ButtonBorder); }
+button:disabled { opacity: .55; cursor: default; }
+#status { min-height: 3.2em; line-height: 1.5; color: var(--kerminal-muted-foreground, GrayText); margin-top: 14px; overflow-wrap: anywhere; }
+:root[data-density="compact"] main { padding: 24px; }
+@media (prefers-reduced-motion: no-preference) { button { transition: opacity var(--kerminal-motion-duration, 120ms); } }

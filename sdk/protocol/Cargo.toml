@@ -1,0 +1,14 @@
+# The wire protocol can be published without any Kerminal application dependency.
+[package]
+name = "kerminal-plugin-protocol"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "GPL-3.0-or-later"
+description = "Portable declarative manifests and wire messages for Kerminal plugins"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+semver = "1"
+thiserror = "2"

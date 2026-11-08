@@ -1,0 +1,5 @@
+* text=auto eol=lf
+# Signed snapshots must retain their exact bytes on every checkout platform.
+catalog/index.json -text
+*.minisig -text
+*.pub -text
