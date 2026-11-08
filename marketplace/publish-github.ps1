@@ -27,6 +27,7 @@ function Invoke-PublisherProcess {
     $start = [Diagnostics.ProcessStartInfo]::new()
     $start.FileName = $Program
     $start.UseShellExecute = $false
+    $start.CreateNoWindow = $true
     $start.RedirectStandardOutput = $true
     $start.RedirectStandardError = $true
     $start.RedirectStandardInput = $null -ne $Password
@@ -268,7 +269,7 @@ if ($null -ne $SigningPassword) { $indexSign += '--password-stdin' }
 [void](Invoke-PublisherProcess $PluginToolPath $indexSign $SigningPassword)
 [void](Invoke-PublisherProcess $PluginToolPath @('verify-signature', '--input', (Join-Path $OutputDirectory 'index.json'), '--signature', (Join-Path $OutputDirectory 'index.json.minisig'), '--public-key', $PublicKeyPath))
 Write-PublisherJson (Join-Path $OutputDirectory 'github-source.json') @{
-    id = $SourceId; name = 'Kerminal GitHub 示例'; indexUrl = "$base/$CatalogReleaseTag/index.json"
+    id = $SourceId; name = 'Kerminal 插件市场'; indexUrl = "$base/$CatalogReleaseTag/index.json"
     indexSignatureUrl = "$base/$CatalogReleaseTag/index.json.minisig"; indexKeyId = $KeyId
     keys = @{ $KeyId = [IO.File]::ReadAllText($PublicKeyPath) }; pluginPrefixes = @($PluginPrefix); downloadOrigins = $origins
 }

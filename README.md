@@ -10,7 +10,7 @@ Kerminal → 设置 → 插件 → 市场。安装后插件仍保留在市场；
 - [签名目录](https://github.com/kongweiguang/Kerminal-Plugins/releases/download/plugins-catalog-v1/index.json)及[分离签名](https://github.com/kongweiguang/Kerminal-Plugins/releases/download/plugins-catalog-v1/index.json.minisig)。
 - [工作台便笺 1.0.0](https://github.com/kongweiguang/Kerminal-Plugins/releases/tag/plugin-workbench-v1.0.0)：Windows x64 原生示例，包含主机类型、便笺 Tab、右栏工具、设置和命令。
 
-来源 ID `kerminal-github` 和公钥沿用原 Kerminal 示例源。新仓库初始目录 sequence 为 2；1.0.0 包逐字迁移，SHA-256 保持不变。原仓库的旧 release 保留，已有来源配置仍可下载；升级来源地址后继续沿用原身份，不由新来源接管已安装包。
+来源 ID `kerminal-github` 和公钥沿用原 Kerminal 示例源。新仓库初始目录 sequence 为 2；1.0.0 包逐字迁移，SHA-256 保持不变。原仓库的旧 release 保留，已有来源配置仍可下载；升级来源地址后继续沿用原身份，不由新来源接管已安装包。新版默认信任审核后的 `kerminal.*` 官方命名空间及历史 `example.workbench`。已有用户保存的来源不会自动扩大信任或改 URL；需在来源管理中核对公钥、命名空间和新地址后明确更新。
 
 ## 开发
 
@@ -41,6 +41,8 @@ $password = Read-Host 'Signing password' -AsSecureString
 ```
 
 准备阶段默认不发布。核对生成的 `index.json`、签名及 `catalog-receipt.json` 后，在单一发布者控制下，将新包先作为独立不可变 release 发布，最后更新 `plugins-catalog-v1` 的目录和签名。目录有效期最多 31 天，过期前递增 sequence 并重新签名；离线或过期目录不会影响已安装插件使用。目录与分离签名不能经 GitHub API 原子替换，客户端在替换间隙验签失败时保留上次完整缓存并可重试。
+
+已经下载的完整 Release 资产可用 `-ArtifactsDirectory <目录>` 离线准备。文件名必须对应列表中的实际 URL；仍逐项检查完整包签名、身份、SHA-256 和大小，不因为来自本地就跳过验证。联网失败会保留失败现场并退出，换新输出目录重试，不覆盖旧候选。
 
 初始单示例发布可使用经过恢复测试的 [`publish-github.ps1`](marketplace/publish-github.ps1)。它会拒绝丢弃其他插件的旧目录；有多个插件后应使用完整列表生成结果并审核发布，不得用单示例发布器覆盖完整列表。后续发布前，核对旧目录序列及每个已发布 ID/版本的摘要，不覆写已有版本。
 

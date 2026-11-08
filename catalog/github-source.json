@@ -7,11 +7,12 @@
     "https://release-assets.githubusercontent.com"
   ],
   "pluginPrefixes": [
-    "example.workbench"
+    "example.workbench",
+    "kerminal"
   ],
   "keys": {
     "kerminal-examples-2026": "untrusted comment: minisign public key: 77B8D8CF95390347\nRWRHAzmVz9i4dybg8RQmxYXve/GtXm6e/+FUcDAHXrkFr/NTQrxXpSD9\n"
   },
   "indexSignatureUrl": "https://github.com/kongweiguang/Kerminal-Plugins/releases/download/plugins-catalog-v1/index.json.minisig",
-  "name": "Kerminal GitHub 示例"
+  "name": "Kerminal 插件市场"
 }

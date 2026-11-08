@@ -5,7 +5,8 @@ param(
     [Parameter(Mandatory)][Security.SecureString]$SigningPassword,
     [Parameter(Mandatory)][ValidateRange(1, 18446744073709551615)][uint64]$Sequence,
     [Parameter(Mandatory)][string]$OutputDirectory,
-    [ValidateRange(1, 31)][int]$ExpiresInDays = 30
+    [ValidateRange(1, 31)][int]$ExpiresInDays = 30,
+    [string]$ArtifactsDirectory
 )
 
 Set-StrictMode -Version Latest
@@ -56,15 +57,26 @@ function Write-CatalogJson {
 }
 
 function Receive-CatalogAsset {
-    # Every redirect must remain in the reviewed origin allowlist, and declared byte bounds apply while streaming.
+    # Cached artifacts still pass identical signature, identity and digest checks; online redirects and streams stay bounded.
     param([uri]$Url, [string]$Destination, [long]$MaximumBytes)
+    if ($null -ne $script:artifactRoot) {
+        $name = [Uri]::UnescapeDataString($Url.Segments[-1])
+        if ([IO.Path]::GetFileName($name) -cne $name -or $name -cnotmatch '^[A-Za-z0-9][A-Za-z0-9._+-]*$') { throw 'Unsafe cached asset name.' }
+        $candidate = Join-Path $script:artifactRoot $name
+        $file = Get-Item -LiteralPath $candidate
+        if ($file.PSIsContainer -or $file.Length -gt $MaximumBytes) { throw 'Cached asset exceeds its reviewed bound.' }
+        Copy-Item -LiteralPath $candidate -Destination $Destination
+        return
+    }
     $current = $Url
+    $deadline = [Threading.CancellationTokenSource]::new(120000)
+    try {
     for ($hop = 0; $hop -lt 6; $hop++) {
         if ($current.Scheme -cne 'https' -or $current.UserInfo -ne '' -or $current.Fragment -ne '' -or
             $script:source.downloadOrigins -cnotcontains $current.GetLeftPart([UriPartial]::Authority)) {
             throw 'Asset URL or redirect is outside the reviewed HTTPS download origins.'
         }
-        $response = $script:client.GetAsync($current, [Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
+        $response = $script:client.GetAsync($current, [Net.Http.HttpCompletionOption]::ResponseHeadersRead, $deadline.Token).GetAwaiter().GetResult()
         try {
             $status = [int]$response.StatusCode
             if ($status -in @(301,302,303,307,308)) {
@@ -81,7 +93,7 @@ function Receive-CatalogAsset {
             try {
                 $buffer = [byte[]]::new(65536)
                 [long]$count = 0
-                while (($read = $inputStream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+                while (($read = $inputStream.ReadAsync($buffer, 0, $buffer.Length, $deadline.Token).GetAwaiter().GetResult()) -gt 0) {
                     $count += $read
                     if ($count -gt $MaximumBytes) { throw 'Asset exceeds its reviewed byte bound.' }
                     $outputStream.Write($buffer, 0, $read)
@@ -93,9 +105,12 @@ function Receive-CatalogAsset {
         finally { $response.Dispose() }
     }
     throw 'Asset redirect limit exceeded.'
+    }
+    finally { $deadline.Dispose() }
 }
 
 $repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+$script:artifactRoot = if ([string]::IsNullOrWhiteSpace($ArtifactsDirectory)) { $null } else { (Resolve-Path -LiteralPath $ArtifactsDirectory).Path }
 $script:toolPath = (Resolve-Path -LiteralPath $PluginToolPath).Path
 $secretPath = (Resolve-Path -LiteralPath $SecretKeyPath).Path
 if ($secretPath.StartsWith($repositoryRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
