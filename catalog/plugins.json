@@ -12,8 +12,8 @@
       "min_minor": 0
     },
     "packageKeyId": "kerminal-examples-2026",
-    "archiveUrl": "https://github.com/kongweiguang/Kerminal-Plugins/releases/download/plugin-workbench-v1.0.0/workbench-demo-1.0.0-windows_x86_64.tar",
-    "signatureUrl": "https://github.com/kongweiguang/Kerminal-Plugins/releases/download/plugin-workbench-v1.0.0/workbench-demo-1.0.0-windows_x86_64.tar.minisig",
+    "archiveUrl": "https://raw.githubusercontent.com/kongweiguang/Kerminal-Plugins/plugin-workbench-1.0.0-windows-x86_64/packages/example.workbench/1.0.0/windows_x86_64/workbench-demo-1.0.0-windows_x86_64.tar",
+    "signatureUrl": "https://raw.githubusercontent.com/kongweiguang/Kerminal-Plugins/plugin-workbench-1.0.0-windows-x86_64/packages/example.workbench/1.0.0/windows_x86_64/workbench-demo-1.0.0-windows_x86_64.tar.minisig",
     "sha256": "e2591b4d455dc224d98ed5f5aa2f4332aba3bb737cef271d46eb04f528388c93",
     "archiveBytes": 475648
   }

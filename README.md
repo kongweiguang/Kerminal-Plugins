@@ -1,16 +1,18 @@
 # Kerminal 插件市场
 
-这里维护 Kerminal 插件源码、独立 SDK、完整目录源文件和签名发布工具。客户端通过静态签名目录发现插件，通过 GitHub Releases 下载插件包，不依赖 GitHub 搜索 API。
+这里维护 Kerminal 插件源码、独立 SDK、完整目录源文件和签名发布工具。客户端通过静态签名目录发现插件，不依赖 GitHub 搜索 API。GitHub Releases 保留完整分发；官方小型示例另提供固定 tag 下的同字节 Raw 镜像，以便不借助 GitHub token 安装。
 
 ## 使用
 
 Kerminal → 设置 → 插件 → 市场。安装后插件仍保留在市场；“已安装”用于管理本机状态。安装、更新、启用、禁用和卸载在正常重启后生效。
 
 - [受信来源配置](catalog/github-source.json)：固定来源 ID、公钥、命名空间和下载来源。
-- [签名目录](https://github.com/kongweiguang/Kerminal-Plugins/releases/download/plugins-catalog-v1/index.json)及[分离签名](https://github.com/kongweiguang/Kerminal-Plugins/releases/download/plugins-catalog-v1/index.json.minisig)。
+- [签名目录](https://raw.githubusercontent.com/kongweiguang/Kerminal-Plugins/main/catalog/index.json)及[分离签名](https://raw.githubusercontent.com/kongweiguang/Kerminal-Plugins/main/catalog/index.json.minisig)，保留 [Release 分发](https://github.com/kongweiguang/Kerminal-Plugins/releases/tag/plugins-catalog-v1)。
 - [工作台便笺 1.0.0](https://github.com/kongweiguang/Kerminal-Plugins/releases/tag/plugin-workbench-v1.0.0)：Windows x64 原生示例，包含主机类型、便笺 Tab、右栏工具、设置和命令。
 
-来源 ID `kerminal-github` 和公钥沿用原 Kerminal 示例源。新仓库初始目录 sequence 为 2；1.0.0 包逐字迁移，SHA-256 保持不变。原仓库的旧 release 保留，已有来源配置仍可下载；升级来源地址后继续沿用原身份，不由新来源接管已安装包。新版默认信任审核后的 `kerminal.*` 官方命名空间及历史 `example.workbench`。已有用户保存的来源不会自动扩大信任或改 URL；需在来源管理中核对公钥、命名空间和新地址后明确更新。
+来源 ID `kerminal-github` 和公钥沿用原 Kerminal 示例源。新仓库初始目录 sequence 为 2，Raw 镜像目录为 3；1.0.0 包逐字迁移，SHA-256 保持不变。原仓库的旧 release 保留；升级来源地址后继续沿用原身份，不由新来源接管已安装包。新版默认信任审核后的 `kerminal.*` 官方命名空间及历史 `example.workbench`，下载域名包含 `github.com`、`release-assets.githubusercontent.com` 和 `raw.githubusercontent.com`。已有用户保存的来源不会自动扩大信任或改 URL；需在来源管理中核对公钥、命名空间和新地址后明确更新。
+
+官方示例 Raw 包固定到 tag `plugin-workbench-1.0.0-windows-x86_64`，不跟随 main。已发布 tag 与版本包不得改写。主分支目录和签名分两次读取；更新间隙或 CDN 缓存不一致时，客户端拒绝刷新并保留上一份完整缓存，可稍后重试。所有入口使用同一公钥、摘要和单调 sequence 校验，不因使用 Raw 而跳过签名。
 
 ## 开发
 
@@ -37,7 +39,7 @@ Linux 的工具路径为 `target/debug/kerminal-plugin`。每个平台独立构�
 $password = Read-Host 'Signing password' -AsSecureString
 ./marketplace/prepare-catalog.ps1 -PluginToolPath target/debug/kerminal-plugin.exe `
   -SecretKeyPath C:/private/publisher.key -SigningPassword $password `
-  -Sequence 3 -OutputDirectory .local/catalog-3
+  -Sequence 4 -OutputDirectory .local/catalog-4
 ```
 
 准备阶段默认不发布。核对生成的 `index.json`、签名及 `catalog-receipt.json` 后，在单一发布者控制下，将新包先作为独立不可变 release 发布，最后更新 `plugins-catalog-v1` 的目录和签名。目录有效期最多 31 天，过期前递增 sequence 并重新签名；离线或过期目录不会影响已安装插件使用。目录与分离签名不能经 GitHub API 原子替换，客户端在替换间隙验签失败时保留上次完整缓存并可重试。
@@ -50,6 +52,6 @@ $password = Read-Host 'Signing password' -AsSecureString
 
 ## 来源与授权
 
-SDK 和示例来自 [Kerminal](https://github.com/kongweiguang/Kerminal)，按 GPL-3.0-or-later 分发，保留原许可证。源码快照及首包迁移记录见 [`catalog/provenance.json`](catalog/provenance.json)。首次迁移沿用原已签名包，独立 CI 的后续构建不宣称可逐字复现该历史包。
+SDK 和示例来自 [Kerminal](https://github.com/kongweiguang/Kerminal)，按 GPL-3.0-or-later 分发，保留原许可证。源码快照及首包迁移记录见 [`catalog/provenance.json`](catalog/provenance.json)。首次迁移沿用原已签名包，独立 CI 的后续构建不宣称可逐字复现该历史包。`packages/` 仅保存已审核的小型官方示例镜像，不作为任意插件二进制上传入口。
 
 签名用于验证来源与完整性；原生后端以当前用户权限运行，不是 OS 安全沙箱。请只安装你信任的插件。
