@@ -8,3 +8,5 @@
 *.pem
 *.dpapi
 !sdk/examples/workbench-demo/Cargo.lock
+__pycache__/
+*.pyc

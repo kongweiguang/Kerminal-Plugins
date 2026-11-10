@@ -48,10 +48,43 @@ $password = Read-Host 'Signing password' -AsSecureString
 
 初始单示例发布可使用经过恢复测试的 [`publish-github.ps1`](marketplace/publish-github.ps1)。它会拒绝丢弃其他插件的旧目录；有多个插件后应使用完整列表生成结果并审核发布，不得用单示例发布器覆盖完整列表。后续发布前，核对旧目录序列及每个已发布 ID/版本的摘要，不覆写已有版本。
 
-本仓库 CI 只验证和构建无签名候选，不持有签名密钥，也不会自动更新市场。首次正式目录及包已由本地受控发布链路发布。发布状态以实际 Release 为准。
+既有目录 CI 只验证和构建无签名候选；独立插件目录 v1 的签名发布工作流见下文。首次正式目录及包已由本地受控发布链路发布。发布状态以实际 Release 为准。
 
 ## 来源与授权
 
 SDK 和示例来自 [Kerminal](https://github.com/kongweiguang/Kerminal)，按 GPL-3.0-or-later 分发，保留原许可证。源码快照及首包迁移记录见 [`catalog/provenance.json`](catalog/provenance.json)。首次迁移沿用原已签名包，独立 CI 的后续构建不宣称可逐字复现该历史包。`packages/` 仅保存已审核的小型官方示例镜像，不作为任意插件二进制上传入口。
 
 签名用于验证来源与完整性；原生后端以当前用户权限运行，不是 OS 安全沙箱。请只安装你信任的插件。
+
+## 独立插件目录 v1（开发中）
+
+`plugins/<id>.toml` 是登记输入，`categories.toml` 定义分类；目前 `acme.notes`、`kerminal.http-check`、`kerminal.file-search` 只登记为 `pending`，不携带虚构仓库、版本、URL、摘要或大小，也不进入可签名目录。`catalog/` 和 `packages/example.workbench/1.0.0/` 保存既有版本，不能重写。v1 JSON 已对应 Kerminal P5 的目录字段和固定 Release 入口；真实发行资产、正式目录发布及客户端联调仍待完成。
+
+作者发布真实 Release 后，将登记文件改为：
+
+```toml
+# 旧版本排在前面，新版本追加在最后。
+repository = "https://github.com/acme/kerminal-notes"
+categories = ["productivity"]
+
+[[versions]]
+version = "1.0.0"
+tag = "v1.0.0"
+```
+
+仓库和标签仅为示例，不声称 Release 存在。所有版本和平台的清单应匹配登记 ID、版本及分类，同一版本各平台的名称、权限和 API 必须一致；最终目录的插件级元数据取最后登记的版本。脚本从公开 GitHub Release 下载实际 `.kplugin`，通过匹配目标版本的 `kerminal-plugin check` 检查包，再计算字节大小与 SHA-256。通用包为 `any`，官方 Sidecar 必须有 Windows/Linux x86_64 和 macOS x86_64/aarch64 四个包；第三方 Sidecar 可提供部分平台。`kerminal.` 保留给官方 owner。脚本读取所登记最新 tag 的 README，镜像 README 首图以及包中声明的图标；README 无图片或清单未声明图标时对应图片缺省。媒体以内容摘要命名并与目录上传至同一带序号 Release。仅允许可信 GitHub HTTPS 地址与受限相对路径；图片限制 2 MiB 并校验 MIME/格式，SVG 拒绝活动内容和外部引用，README 限制 1 MiB。
+
+本地只校验登记（不访问网络、签名或发布）：
+
+```powershell
+python marketplace/catalog-v1.py --metadata-only
+python -m unittest discover -s marketplace/tests -p 'test_catalog_v1.py'
+```
+
+有真实 Release、GitHub CLI 登录及匹配版本的 CLI 后，可生成未签名目录以供审查：
+
+```powershell
+python marketplace/catalog-v1.py --tool C:\path\to\kerminal-plugin.exe --sequence 1 --output .local/catalog.json
+```
+
+该本地输出不是正式目录；`sequence` 必须由发布流程依据已验签的上一份正式目录递增。签名前会逐项比较历史 ID/版本的资产和 API，拒绝删除历史版本或改写已发布包；新版本追加登记。所有条目仍待发布时脚本会拒绝生成空的生产目录。`.github/workflows/catalog-v1-validate.yml` 为 PR 检查，发布工作流串行生成、签名、验签、回读 Release 资产后发布。要启用需要先配置仓库变量 `KERMINAL_SDK_REF` 为完整 SDK 提交 SHA；首次正式发布还须明确配置 `KERMINAL_CATALOG_BOOTSTRAP=true`，并由维护者在 GitHub Secret 配置与 `catalog/publisher.pub` 对应的 `KERMINAL_CATALOG_MINISIGN_KEY`。不要将私钥放进仓库。工作流当前要求无需交互口令的 minisign Secret；加密私钥的非交互解锁尚未验证。本次未配置 Secret、变量或发布正式目录，其远端现状未核实；签名流程、GitHub 下载与跨仓库发布闭环必须另行联调验证。客户端固定使用 `https://github.com/kongweiguang/Kerminal-Plugins/releases/download/catalog-v1/catalog.json` 和相邻的 `catalog.json.minisig`，不依赖 Latest。每次先发布带递增序列的不可变快照 `catalog-v1-<sequence>`（含媒体），再更新固定 Release 的目录和签名；旧目录仍引用原序列的媒体。两个固定资产无法原子替换，更新间隙客户端可能验签失败并继续使用已验证缓存。若执行中断导致固定目录和快照不一致，工作流拒绝继续，维护者须检查固定 Release、签名和最新不可变快照并恢复一致后重试，不应重用或覆盖快照。

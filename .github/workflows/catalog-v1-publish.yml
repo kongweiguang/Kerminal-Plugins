@@ -1,0 +1,122 @@
+# @author kongweiguang
+name: Publish signed marketplace v1
+on:
+  push:
+    branches: [main]
+    paths: ['plugins/**', 'categories.toml', 'marketplace/catalog-v1.py', 'marketplace/media_v1.py', 'marketplace/publication_v1.py', 'marketplace/tests/**', '.github/workflows/catalog-v1-publish.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: marketplace-v1-publish
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate registrations and tests
+        run: |
+          python marketplace/catalog-v1.py --metadata-only
+          python -m unittest discover -s marketplace/tests -p 'test_catalog_v1.py'
+      - name: Detect published entries
+        id: entries
+        run: |
+          python - <<'PY'
+          import importlib.util, os, sys
+          sys.path.insert(0, 'marketplace')
+          spec = importlib.util.spec_from_file_location('catalog', 'marketplace/catalog-v1.py')
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          published = any(entry.get('status', 'published') == 'published' for _, entry in module.load_registrations(module.ROOT))
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              print('published=' + str(published).lower(), file=output)
+          PY
+      - name: Validate pinned SDK ref
+        if: steps.entries.outputs.published == 'true'
+        env:
+          SDK_REF: ${{ vars.KERMINAL_SDK_REF }}
+        run: '[[ "$SDK_REF" =~ ^[0-9a-fA-F]{40}$ ]] || { echo "missing pinned KERMINAL_SDK_REF" >&2; exit 1; }'
+      - uses: actions/checkout@v4
+        if: steps.entries.outputs.published == 'true'
+        with:
+          repository: kongweiguang/Kerminal
+          ref: ${{ vars.KERMINAL_SDK_REF }}
+          path: sdk-source
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.entries.outputs.published == 'true'
+      - name: Build validator and install minisign
+        if: steps.entries.outputs.published == 'true'
+        run: |
+          cargo install --locked --path sdk-source/sdk/cli --root "$RUNNER_TEMP/tool"
+          sudo apt-get update && sudo apt-get install -y minisign
+
+      - name: Generate signed snapshot and update fixed catalog
+        if: steps.entries.outputs.published == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CATALOG_KEY: ${{ secrets.KERMINAL_CATALOG_MINISIGN_KEY }}
+          BOOTSTRAP: ${{ vars.KERMINAL_CATALOG_BOOTSTRAP }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REPOSITORY" == "kongweiguang/Kerminal-Plugins" ]] || { echo 'refusing to publish from unexpected repository' >&2; exit 1; }
+          test -n "$CATALOG_KEY" || { echo 'missing catalog signing secret' >&2; exit 1; }
+          mkdir "$RUNNER_TEMP/catalog-v1"
+          cd "$RUNNER_TEMP/catalog-v1"
+          gh release list --repo "$GITHUB_REPOSITORY" --limit 1000 --json tagName > releases.json
+          python -c 'import json; assert len(json.load(open("releases.json"))) < 1000, "release list truncated"'
+          if python -c 'import json,sys; sys.exit(0 if any(x["tagName"] == "catalog-v1" for x in json.load(open("releases.json"))) else 1)'; then
+            gh release download catalog-v1 --repo "$GITHUB_REPOSITORY" --pattern 'catalog.json*' --dir previous
+            minisign -Vm previous/catalog.json -x previous/catalog.json.minisig -p "$GITHUB_WORKSPACE/catalog/publisher.pub"
+            sequence=$(python "$GITHUB_WORKSPACE/marketplace/publication_v1.py" --releases releases.json --fixed previous/catalog.json)
+            previous_sequence=$((sequence - 1))
+            gh release download "catalog-v1-$previous_sequence" --repo "$GITHUB_REPOSITORY" --pattern 'catalog.json*' --dir previous-snapshot
+            cmp previous/catalog.json previous-snapshot/catalog.json
+            cmp previous/catalog.json.minisig previous-snapshot/catalog.json.minisig
+            fixed_exists=true
+          else
+            bootstrap_arg=()
+            [[ "$BOOTSTRAP" != true ]] || bootstrap_arg=(--bootstrap)
+            sequence=$(python "$GITHUB_WORKSPACE/marketplace/publication_v1.py" --releases releases.json "${bootstrap_arg[@]}")
+            fixed_exists=false
+          fi
+          python "$GITHUB_WORKSPACE/marketplace/catalog-v1.py" --tool "$RUNNER_TEMP/tool/bin/kerminal-plugin" --sequence "$sequence" --output catalog.json --media-dir media
+          if [[ "$fixed_exists" == true ]]; then
+            python "$GITHUB_WORKSPACE/marketplace/publication_v1.py" --releases releases.json --fixed previous/catalog.json --candidate catalog.json
+          fi
+          umask 077
+          printf '%s\n' "$CATALOG_KEY" > signing.key
+          unset CATALOG_KEY
+          trap 'rm -f signing.key' EXIT
+          minisign -Sm catalog.json -s signing.key -x catalog.json.minisig
+          minisign -Vm catalog.json -x catalog.json.minisig -p "$GITHUB_WORKSPACE/catalog/publisher.pub"
+          tag="catalog-v1-$sequence"
+          gh release create "$tag" --repo "$GITHUB_REPOSITORY" --draft --title "$tag" --notes 'Signed Kerminal plugin catalog' catalog.json catalog.json.minisig media/*
+          mkdir readback
+          gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern 'catalog.json*' --dir readback
+          cmp catalog.json readback/catalog.json
+          cmp catalog.json.minisig readback/catalog.json.minisig
+          gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern 'media-*' --dir readback
+          for asset in media/*; do cmp "$asset" "readback/$(basename "$asset")"; done
+          gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false --latest=false
+          if [[ "$fixed_exists" == false ]]; then
+            gh release create catalog-v1 --repo "$GITHUB_REPOSITORY" --draft --title 'Kerminal plugin catalog' --notes 'Signed current catalog' catalog.json catalog.json.minisig
+          else
+            gh release upload catalog-v1 --repo "$GITHUB_REPOSITORY" --clobber catalog.json catalog.json.minisig
+          fi
+          mkdir fixed-readback
+          gh release download catalog-v1 --repo "$GITHUB_REPOSITORY" --pattern 'catalog.json*' --dir fixed-readback
+          cmp catalog.json fixed-readback/catalog.json
+          cmp catalog.json.minisig fixed-readback/catalog.json.minisig
+          minisign -Vm fixed-readback/catalog.json -x fixed-readback/catalog.json.minisig -p "$GITHUB_WORKSPACE/catalog/publisher.pub"
+          fixed_draft=$(gh release view catalog-v1 --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')
+          if [[ "$fixed_draft" == true ]]; then
+            gh release edit catalog-v1 --repo "$GITHUB_REPOSITORY" --draft=false --latest=false
+          fi
