@@ -16,7 +16,8 @@ permissions:
   contents: read
 jobs:
   validate:
-    runs-on: ubuntu-22.04
+    # 与发布环境使用同一系统版本，确保能从签名软件包源安装 minisign。
+    runs-on: ubuntu-24.04
     steps:
       # workflow_dispatch 允许选任意分支触发；本 job 只做只读验证，但仍拒绝
       # 在非 main 分支上手动运行，避免「验证过」被误读为发布候选已审。PR

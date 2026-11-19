@@ -66,7 +66,8 @@ concurrency:
 jobs:
   verify:
     name: Verify candidate and generate catalog
-    runs-on: ubuntu-22.04
+    # Ubuntu 24.04 的签名软件包源提供 minisign；22.04 缺包，不能作为发布 runner。
+    runs-on: ubuntu-24.04
     # 只读权限：checkout 受信/候选检出、读取 Release 资产与 README 需要 contents
     # 读；私有仓库不能靠匿名读取，公开仓库是否无需授权也不作为前提。绝无写权限，
     # 签名与发布只发生在 sign job。
@@ -279,7 +280,8 @@ jobs:
     # GitHub 仍可能直接运行本 job，即缺审批不缺执行——这正是必须先在仓库外
     # 配好环境的原因，本文件只能拒绝继续，不能替 GitHub 强制审批。
     environment: catalog-signer
-    runs-on: ubuntu-22.04
+    # Ubuntu 24.04 的签名软件包源提供 minisign；22.04 缺包，不能作为发布 runner。
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
