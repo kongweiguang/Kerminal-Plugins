@@ -13,7 +13,7 @@ import tomllib
 from pathlib import Path
 from urllib.parse import quote
 
-from media_v1 import image_extension, mirror_readme, store_media
+from media_v1 import MAX_README, image_extension, mirror_readme, store_media
 
 MARKET_REPOSITORY = 'kongweiguang/Kerminal-Plugins'
 
@@ -27,7 +27,14 @@ MAX_CATALOG_BYTES = 4 * 1024 * 1024
 
 
 def load_registrations(root):
-    """联网前拒绝歧义登记及超出宿主上限的版本，避免发布客户端无法接收的目录。"""
+    """联网前拒绝歧义登记及超出宿主上限的版本，避免发布客户端无法接收的目录。
+
+    已发布登记可选 `readme`，但只接受 `plugins/readmes/<plugin_id>.md` 这一
+    个固定相对路径：登记仓库同时托管商店自身 README，若允许任意路径或 URL，
+    插件页就会显示商店说明而不是插件说明。路径由 ID 派生，因此不存在目录
+    穿越；文件必须存在、不是符号链接且不超过宿主 1 MiB README 上限，避免
+    生成阶段才发现缺文件或超限而留下半成品媒体。
+    """
     categories = tomllib.loads((root / "categories.toml").read_text(encoding="utf-8"))["categories"]
     if not categories or any(not isinstance(value, dict) or not value.get("en") or not value.get("zh-CN") for value in categories.values()):
         raise ValueError("categories require English and Chinese names")
@@ -37,7 +44,7 @@ def load_registrations(root):
         if not ID.fullmatch(plugin_id):
             raise ValueError(f"invalid plugin ID: {plugin_id}")
         entry = tomllib.loads(path.read_text(encoding="utf-8"))
-        if set(entry) - {"status", "repository", "categories", "versions"}:
+        if set(entry) - {"status", "repository", "categories", "versions", "readme"}:
             raise ValueError(f"unknown registration fields: {plugin_id}")
         names = entry.get("categories")
         if not isinstance(names, list) or not names or len(set(names)) != len(names) or any(name not in categories for name in names):
@@ -53,6 +60,16 @@ def load_registrations(root):
                 raise ValueError(f"invalid GitHub repository: {plugin_id}")
             if plugin_id.startswith("kerminal.") and match.group(1).lower() != "kongweiguang":
                 raise ValueError(f"reserved official ID requires official owner: {plugin_id}")
+            readme = entry.get("readme")
+            if readme is not None:
+                expected = f"plugins/readmes/{plugin_id}.md"
+                if readme != expected:
+                    raise ValueError(f"readme must be {expected}: {plugin_id}")
+                readme_path = root / expected
+                if readme_path.is_symlink() or not readme_path.is_file():
+                    raise ValueError(f"readme file is missing or not a regular file: {plugin_id}")
+                if readme_path.stat().st_size > MAX_README:
+                    raise ValueError(f"readme exceeds the host size limit: {plugin_id}")
             versions = entry.get("versions")
             if not isinstance(versions, list) or not versions or len(versions) > 1024:
                 raise ValueError(f"published entry has no versions: {plugin_id}")
@@ -151,7 +168,18 @@ def build_catalog(root, tool, sequence, media_dir=None):
                 final_tag = tag
                 versions.append({"version": version, "api": version_api, "published_at": release["publishedAt"], "changelog_url": f"https://github.com/{repo}/releases/tag/{quote(tag, safe='')}", "assets": packed})
             icon_url = store_media(media_dir, MARKET_REPOSITORY, sequence, final_icon, image_extension(final_icon)) if final_icon is not None else None
-            readme_url = mirror_readme(repo, final_tag, media_dir, MARKET_REPOSITORY, sequence)
+            if "readme" in entry:
+                # 登记 README 原样发布为内容寻址媒体：它属于插件作者数据，不能
+                # 被商店仓库 README 顶替，也不改写其中的相对链接（需要图片时
+                # 应使用绝对地址）。load_registrations 已校验路径、类型与上限。
+                readme_bytes = (root / entry["readme"]).read_bytes()
+                try:
+                    readme_bytes.decode("utf-8")
+                except UnicodeDecodeError as error:
+                    raise ValueError(f"readme is not UTF-8: {plugin_id}") from error
+                readme_url = store_media(media_dir, MARKET_REPOSITORY, sequence, readme_bytes, "md")
+            else:
+                readme_url = mirror_readme(repo, final_tag, media_dir, MARKET_REPOSITORY, sequence)
             plugins.append({"id": plugin_id, **identity, "categories": entry["categories"], "icon_url": icon_url, "readme_url": readme_url, "repository": entry["repository"], "versions": versions})
     return {"schema": 1, "source_id": "official", "sequence": sequence, "plugins": plugins}
 

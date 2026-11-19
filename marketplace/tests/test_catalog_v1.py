@@ -158,20 +158,25 @@ class CatalogTests(unittest.TestCase):
                 publication_v1.next_sequence(fixed, records, bootstrap)
 
     def test_publication_cli_compares_candidate_before_signing(self):
-        """执行工作流调用的真实 CLI，确保候选比较选项不会只存在于未接线的函数测试中。"""
+        """执行工作流调用的真实 CLI，确保候选比较选项不会只存在于未接线的函数测试中。
+
+        子解释器固定 `-X utf8`，父进程也显式按 UTF-8 解码：CLI 的失败信息是中文，
+        Windows 默认 GBK 下 `text=True` 会在读取线程里抛 UnicodeDecodeError 并把
+        stderr 变成 None，使用例结果依赖外部 PYTHONUTF8 而不是被测行为。
+        """
         previous = {"schema": 1, "source_id": "official", "sequence": 1, "plugins": [{"id": "acme.notes", "versions": [{"version": "1.0.0", "api": "^1.0", "assets": [{"platform": "any", "url": "https://github.com/acme/notes/a.kplugin", "sha256": "a" * 64, "size": 100}]}]}]}
         candidate = copy.deepcopy(previous)
         candidate["sequence"] = 2
         releases = [{"tagName": "catalog-v1"}, {"tagName": "catalog-v1-1"}]
         for name, document in (("previous", previous), ("candidate", candidate), ("releases", releases)):
             (self.root / f"{name}.json").write_text(json.dumps(document), encoding="utf-8")
-        command = [sys.executable, str(Path(publication_v1.__file__)), "--releases", str(self.root / "releases.json"), "--fixed", str(self.root / "previous.json"), "--candidate", str(self.root / "candidate.json")]
-        result = subprocess.run(command, capture_output=True, text=True)
+        command = [sys.executable, "-X", "utf8", str(Path(publication_v1.__file__)), "--releases", str(self.root / "releases.json"), "--fixed", str(self.root / "previous.json"), "--candidate", str(self.root / "candidate.json")]
+        result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), "2")
         candidate["plugins"][0]["versions"][0]["assets"][0]["sha256"] = "b" * 64
         (self.root / "candidate.json").write_text(json.dumps(candidate), encoding="utf-8")
-        result = subprocess.run(command, capture_output=True, text=True)
+        result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("published package cannot be changed", result.stderr)
 
@@ -192,6 +197,82 @@ class CatalogTests(unittest.TestCase):
             media_v1.image_extension(b"not an image", "image/png")
         with self.assertRaises(ValueError):
             media_v1.image_extension(b"x" * (media_v1.MAX_IMAGE + 1), "image/png")
+
+    def test_svg_comments_are_allowed_but_active_content_is_rejected(self):
+        """合法 XML 注释不应让正常图标被拒；DOCTYPE/ENTITY/脚本/外部引用仍拒绝。
+
+        打包图标的作者署名注释是合法 XML，ElementTree 会忽略它；旧规则却用
+        `<!` 一刀切，导致正常图标无法进入目录。这里同时钉住放宽后的边界：
+        注释以外的声明、活动内容和外部引用必须继续失败。
+        """
+        commented = b'<!-- @author kongweiguang -->\n<svg xmlns="http://www.w3.org/2000/svg"><rect width="1" height="1"/></svg>'
+        self.assertEqual(media_v1.image_extension(commented), "svg")
+        self.assertEqual(media_v1.image_extension(commented, "image/svg+xml"), "svg")
+        for data in (
+            b'<!DOCTYPE svg><svg xmlns="http://www.w3.org/2000/svg"/>',
+            b'<!ENTITY x "y"><svg xmlns="http://www.w3.org/2000/svg"/>',
+            b'<?xml-stylesheet href="https://evil.test/x.css"?><svg xmlns="http://www.w3.org/2000/svg"/>',
+            b'<svg xmlns="http://www.w3.org/2000/svg"><script/></svg>',
+            b'<svg xmlns="http://www.w3.org/2000/svg"><foreignObject/></svg>',
+            b'<svg xmlns="http://www.w3.org/2000/svg"><image href="https://evil.test/x.png"/></svg>',
+            b'<svg xmlns="http://www.w3.org/2000/svg"><image src="https://evil.test/x.png"/></svg>',
+            b'<!-- unterminated <svg xmlns="http://www.w3.org/2000/svg"/>',
+        ):
+            with self.subTest(data=data[:32]):
+                with self.assertRaises(ValueError):
+                    media_v1.image_extension(data)
+        # 片段引用仍是合法的内部引用，不被 src/href 规则误伤。
+        self.assertEqual(media_v1.image_extension(b'<svg xmlns="http://www.w3.org/2000/svg"><use href="#shape"/></svg>'), "svg")
+
+    def test_registration_readme_is_published_verbatim_instead_of_store_readme(self):
+        """登记 README 必须按作者文件发布，不能镜像商店仓库 README。"""
+        readme = "# LAN notes\n\nPlugin-specific body.\n"
+        (self.root / "plugins" / "readmes").mkdir()
+        (self.root / "plugins" / "readmes" / "acme.notes.md").write_text(readme, encoding="utf-8")
+        self.registration('repository="https://github.com/acme/notes"\ncategories=["productivity"]\nreadme="plugins/readmes/acme.notes.md"\n[[versions]]\nversion="1.0.0"\ntag="v1.0.0"\n')
+        name = "acme.notes-1.0.0-any.kplugin"
+        manifest = {"id": "acme.notes", "version": "1.0.0", "name": {"en": "Notes"}, "description": {"en": "Notes"}, "publisher": "acme", "categories": ["productivity"], "runtime": {"kind": "script"}, "api": "^1.0"}
+        raw = json.dumps(manifest).encode()
+        asset = self.root / name
+        with tarfile.open(asset, "w:gz") as archive:
+            info = tarfile.TarInfo("kerminal-plugin.json")
+            info.size = len(raw)
+            archive.addfile(info, io.BytesIO(raw))
+
+        def fake_run(command, **kwargs):
+            """模拟下载；登记 README 已提供，不应再触发 README API。"""
+            if command[:3] == ["gh", "release", "download"]:
+                (Path(command[command.index("--dir") + 1]) / name).write_bytes(asset.read_bytes())
+            return None
+
+        release = {"tagName": "v1.0.0", "isDraft": False, "publishedAt": "2026-11-09T00:00:00Z", "assets": [{"name": name}]}
+        with patch.object(catalog, "run_json", return_value=release), patch.object(catalog.subprocess, "run", side_effect=fake_run), patch.object(media_v1, "mirror_readme", side_effect=AssertionError("store README must not be mirrored")):
+            result = catalog.build_catalog(self.root, "validator", 1)
+        item = result["plugins"][0]
+        media = self.root / ".local" / "catalog-media"
+        readme_name = item["readme_url"].split("/")[-1]
+        self.assertEqual((media / readme_name).read_text(encoding="utf-8"), readme)
+        self.assertTrue(item["readme_url"].endswith(f"/catalog-v1-1/{readme_name}"))
+
+    def test_registration_readme_path_and_file_are_validated(self):
+        """README 只接受由插件 ID 派生的固定路径，缺文件、超限或 pending 携带都拒绝。"""
+        (self.root / "plugins" / "readmes").mkdir()
+        base = 'repository="https://github.com/acme/notes"\ncategories=["productivity"]\n[[versions]]\nversion="1.0.0"\ntag="v1.0.0"\n'
+        for readme in ("README.md", "../README.md", "plugins/readmes/other.md", "https://example.test/README.md"):
+            self.registration(f'readme="{readme}"\n' + base)
+            with self.subTest(readme=readme):
+                with self.assertRaises(ValueError):
+                    catalog.load_registrations(self.root)
+        self.registration('readme="plugins/readmes/acme.notes.md"\n' + base)
+        with self.assertRaises(ValueError):
+            catalog.load_registrations(self.root)
+        (self.root / "plugins" / "readmes" / "acme.notes.md").write_text("ok", encoding="utf-8")
+        with patch.object(catalog, "MAX_README", 1):
+            with self.assertRaises(ValueError):
+                catalog.load_registrations(self.root)
+        self.registration('status="pending"\ncategories=["productivity"]\nreadme="plugins/readmes/acme.notes.md"\n')
+        with self.assertRaises(ValueError):
+            catalog.load_registrations(self.root)
 
 
 if __name__ == "__main__":

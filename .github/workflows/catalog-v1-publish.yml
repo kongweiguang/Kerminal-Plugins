@@ -1,41 +1,156 @@
 # @author kongweiguang
+# 可信 v1 市场发布：候选只作为数据输入，签名任务只运行受审固定提交的代码。
+#
+# 安全模型（与 .updeng/docs/design/局域网文件传输插件实施计划.md 5.2/5.3 对齐）：
+# - verify job：无密钥、绝无写权限（permissions: contents: read），只读权限
+#   用于 checkout 受信与候选检出、读取 Release 资产与 README 等资源；私有仓库
+#   下匿名读取不可用，公开仓库能否匿名读取不作为前提。它用 KERMINAL_SIGNER_SHA
+#   钉住的受审检出中的 trusted_publish_v1.py / catalog-v1.py / media_v1.py /
+#   publication_v1.py 执行全部生成与验包（下载资产、摘要、清单校验、媒体镜像）；
+#   候选推送的 marketplace/ 脚本在任何 job 中都不执行，候选只贡献 plugins/ 与
+#   categories.toml 数据文件。产物经单个 artifact 传给 sign job，receipt.json
+#   把候选目录、媒体集合与登记数据绑定为同一份内容。
+# - sign job：唯一持有 contents: write 与签名密钥的 job，运行在受保护的
+#   GitHub Environment（required reviewer 审批）中；它只执行钉住检出中的受信
+#   代码，先重放全部离线约束并产出签名计划，之后才加载 CATALOG_KEY。
+#   回执（receipt）只证明 verify 通道产出自洽（在检查到的材料彼此一致这个意义
+#   上），不是人工批准，也不是作者声明的独立预期摘要；人工批准只来自
+#   Environment 的 required reviewers。
+# - 外部前提（仓库外审批与配置，代码无法证明；其中只有一部分能在仓库内
+#   机械检查，缺失检查项的失败是 fail-closed，缺少审批本身不保证拒绝运行）：
+#   1. KERMINAL_SIGNER_SHA 是管理员管控的受审完整提交 SHA，且该变量只允许
+#      管理员修改；本文件只校验它是 40 位十六进制并在 verify 冻结、sign 复用，
+#      无法证明谁能改它，也无法证明该提交真的经过评审；
+#   2. sign job 使用独立受保护 Environment「catalog-signer」：required
+#      reviewers + 受保护分支策略 + 该环境专属的 KERMINAL_CATALOG_MINISIGN_KEY；
+#      注意这是仓库外必须人工完成的前提——GitHub 不一定因为 environment 尚未
+#      配置 required reviewers 就拒绝运行 job，未配置时缺的是审批门禁而不是
+#      执行许可，因此不能把「能跑」当成「审批已生效」，本文件也不能替 GitHub
+#      强制审批；
+#   3. 受保护 main：对 plugins/**、categories.toml 与本 workflow 的推送经过
+#      人工评审。仓库内另有分支门禁：verify 与 sign 两个 job 的第一步都显式
+#      要求 github.ref == refs/heads/main（workflow_dispatch 可选任意 ref，
+#      不能只靠 Environment 的受保护分支策略兜底）；
+#   4. KERMINAL_SDK_REF 固定为管理员管控的 40 位 SDK 提交；并且默认 GITHUB_TOKEN
+#      能读取该 SDK 仓库（另一仓库的可见性与授权属于仓库外前提）。verify 的
+#      contents:read 只覆盖当前仓库作用域，不保证可检出另一私有 SDK 仓库；
+#      本文件不新增 PAT、secret 或任何扩大凭据权限的机制。
+# 结论：能由代码检查的前提（分支、SHA 形态、bootstrap 许可、回执绑定、回读）
+# 缺失时工作流拒绝继续；不能由代码证明的前提（环境审批是否真的配置、变量是
+# 否只由管理员修改、main 是否真的经过评审）只能如实声明，不宣称已由本文件
+# 保证，也不据此回退到旧的同 runner 持钥执行候选代码方案。
+#
+# artifact 语义：upload/download-artifact v4 不保留空目录，因此合法的「零媒体」
+# 产物在 sign 侧展开时没有 media 目录；Stage 步骤无条件重建空的 out/media，
+# 媒体是否缺失仍由受信 plan 按 receipt.media_manifest 逐文件重算比对决定。
+# 零媒体不会被「空目录丢失」误判为缺失，也不会因为重建空目录而放松校验。
+#
+# 恢复语义（诚实边界）：发布分多个 Release 写入且 GitHub API 没有比较并交换
+# （CAS）能力，任何「先比对再写」都无法排除同权限写者在窗口内的并发变更；
+# 工作流用「写入前验证、写入后回读、任何异常立即失败」把常规漂移挡在门外，
+# 但多文件发布不承诺原子性。中断（快照 draft 已建、固定目录未更新，或反之）
+# 会留下需要人工恢复的状态：绝不执行 gh release delete，已发布的不可变快照
+# 永不改写；恢复时由维护者核对固定 Release、签名与最新不可变快照后决定，
+# 本工作流不提供自动重建。
 name: Publish signed marketplace v1
 on:
   push:
     branches: [main]
-    paths: ['plugins/**', 'categories.toml', 'marketplace/catalog-v1.py', 'marketplace/media_v1.py', 'marketplace/publication_v1.py', 'marketplace/tests/**', '.github/workflows/catalog-v1-publish.yml']
+    paths: ['plugins/**', 'categories.toml', '.github/workflows/catalog-v1-publish.yml']
   workflow_dispatch:
 permissions:
-  contents: write
+  contents: read
 concurrency:
   group: marketplace-v1-publish
   cancel-in-progress: false
 jobs:
-  publish:
+  verify:
+    name: Verify candidate and generate catalog
     runs-on: ubuntu-22.04
+    # 只读权限：checkout 受信/候选检出、读取 Release 资产与 README 需要 contents
+    # 读；私有仓库不能靠匿名读取，公开仓库是否无需授权也不作为前提。绝无写权限，
+    # 签名与发布只发生在 sign job。
+    permissions:
+      contents: read
+    outputs:
+      published: ${{ steps.entries.outputs.published }}
+      signer_sha: ${{ steps.signer.outputs.sha }}
     steps:
+      # 分支门禁放在仓库内：Environment 的受保护分支策略是仓库外配置，未配置时
+      # 不会阻止 job 运行；workflow_dispatch 可以选任意分支或 tag 触发，因此
+      # 验证与签名两条路径都必须自己拒绝非 refs/heads/main，不能只依赖外部配置。
+      - name: Require main branch
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_REF: ${{ github.ref }}
+        run: |
+          [[ "$EVENT_NAME" == "push" || "$EVENT_NAME" == "workflow_dispatch" ]] || { echo 'unsupported trigger' >&2; exit 1; }
+          [[ "$EVENT_REF" == "refs/heads/main" ]] || { echo 'refusing to verify or sign outside refs/heads/main' >&2; exit 1; }
+      # 管理员变量只在这里读取一次：校验完整 SHA 形态后把规范化值冻结为 job
+      # 输出，sign job 只消费该输出，不再读同名变量。变量在两次 job 之间被改动
+      # 时，sign 仍使用 verify 已验证的同一个 SHA。
+      - name: Require admin-controlled signer SHA
+        id: signer
+        env:
+          TRUSTED_REF: ${{ vars.KERMINAL_SIGNER_SHA }}
+        run: |
+          [[ "$TRUSTED_REF" =~ ^[0-9a-fA-F]{40}$ ]] || { echo 'KERMINAL_SIGNER_SHA must be a full audited commit' >&2; exit 1; }
+          printf 'sha=%s\n' "${TRUSTED_REF,,}" >> "$GITHUB_OUTPUT"
+      # 首发许可是管理员显式配置，不是「基线缺失」的自动结果。这里只把变量
+      # 规范化成 true/false 并冻结；真正是否允许 bootstrap 还要看固定目录与
+      # 同轨快照的实际状态（在基线检查步骤裁决）。未配置按 false 处理，让常规
+      # 增量不受影响；非法值直接失败，避免拼写错误被当成许可。
+      - name: Resolve bootstrap license
+        id: bootstrap
+        env:
+          BOOTSTRAP_VAR: ${{ vars.KERMINAL_CATALOG_BOOTSTRAP }}
+        run: |
+          case "${BOOTSTRAP_VAR:-false}" in
+            true) echo 'license=true' >> "$GITHUB_OUTPUT" ;;
+            false) echo 'license=false' >> "$GITHUB_OUTPUT" ;;
+            *) echo 'KERMINAL_CATALOG_BOOTSTRAP must be true or false' >&2; exit 1 ;;
+          esac
+      # 受信检出与候选检出分开：受信代码永远来自钉住的 SHA；候选推送只贡献
+      # plugins/、categories.toml 数据文件，其 marketplace/ 脚本不执行。
       - uses: actions/checkout@v4
         with:
+          ref: ${{ steps.signer.outputs.sha }}
+          path: trusted
+          persist-credentials: false
+      # checkout 的 ref 来自管理员变量；这里再按实际 HEAD 复核一次，确保后续
+      # 执行的 marketplace/ 代码确实来自被冻结的那个提交，而不是解析偏差。
+      - name: Verify signer checkout matches the frozen SHA
+        env:
+          EXPECTED_SHA: ${{ steps.signer.outputs.sha }}
+        run: |
+          actual=$(git -C trusted rev-parse HEAD)
+          [[ "$actual" == "$EXPECTED_SHA" ]] || { echo "trusted checkout HEAD $actual does not match the frozen signer SHA $EXPECTED_SHA" >&2; exit 1; }
+      - uses: actions/checkout@v4
+        with:
+          path: candidate
           persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Validate registrations and tests
-        run: |
-          python marketplace/catalog-v1.py --metadata-only
-          python -m unittest discover -s marketplace/tests -p 'test_catalog_v1.py'
+      # 工作流测试用真实 YAML 解析器读取本文件，PyYAML 不是 setup-python 的
+      # 自带依赖：显式安装精确版本，避免「本机恰好装了就通过」或静默跳过。
+      - name: Install pinned test dependencies
+        run: python -m pip install --disable-pip-version-check --no-input 'PyYAML==6.0.2'
+      - name: Run trusted marketplace test suite
+        run: python -I -m unittest discover -s trusted/marketplace/tests -p 'test_*.py'
+      # 登记数据的合法性由受信代码裁决：inspect 用生成器规则复读候选检出的
+      # 数据根，候选自己的校验脚本不参与判定。pipefail 必须打开：inspect 的
+      # 非零退出码不能被 tee 的成功掩盖，否则后续 heredoc 会读半截输出继续。
       - name: Detect published entries
         id: entries
         run: |
-          python - <<'PY'
-          import importlib.util, os, sys
-          sys.path.insert(0, 'marketplace')
-          spec = importlib.util.spec_from_file_location('catalog', 'marketplace/catalog-v1.py')
-          module = importlib.util.module_from_spec(spec)
-          spec.loader.exec_module(module)
-          published = any(entry.get('status', 'published') == 'published' for _, entry in module.load_registrations(module.ROOT))
+          set -euo pipefail
+          python -I trusted/marketplace/trusted_publish_v1.py inspect --data-root candidate | tee inspect.json
+          python -I - <<'PY'
+          import json, os
+          state = json.load(open('inspect.json'))
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
-              print('published=' + str(published).lower(), file=output)
+              print('published=' + str(state['published']).lower(), file=output)
           PY
       - name: Validate pinned SDK ref
         if: steps.entries.outputs.published == 'true'
@@ -56,66 +171,391 @@ jobs:
         run: |
           cargo install --locked --path sdk-source/sdk/cli --root "$RUNNER_TEMP/tool"
           sudo apt-get update && sudo apt-get install -y minisign
-
-      - name: Generate signed snapshot and update fixed catalog
+      # v1 从未发布过，它有自己的受信公钥 catalog/v1-publisher.pub，不能沿用
+      # 历史 publisher.pub。生成候选时会用它验签固定基线，签名后回读也用它
+      # 复核；缺文件时 minisign 要到更晚的生成/签名阶段才报错，因此这里在
+      # 打包候选之前显式 fail-closed。只检查受信检出工作树里的文件是否非空，
+      # 不要求它由本工作流创建或已由 git 跟踪——离线测试桩自行布置即可。
+      - name: Require v1 trusted public key
+        if: steps.entries.outputs.published == 'true'
+        run: |
+          key="$GITHUB_WORKSPACE/trusted/catalog/v1-publisher.pub"
+          test -s "$key" || { echo 'missing trusted v1 publisher key: catalog/v1-publisher.pub' >&2; exit 1; }
+      - name: Inspect fixed catalog baseline
         if: steps.entries.outputs.published == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          CATALOG_KEY: ${{ secrets.KERMINAL_CATALOG_MINISIGN_KEY }}
-          BOOTSTRAP: ${{ vars.KERMINAL_CATALOG_BOOTSTRAP }}
-        shell: bash
+          BOOTSTRAP_LICENSE: ${{ steps.bootstrap.outputs.license }}
         run: |
           set -euo pipefail
           [[ "$GITHUB_REPOSITORY" == "kongweiguang/Kerminal-Plugins" ]] || { echo 'refusing to publish from unexpected repository' >&2; exit 1; }
-          test -n "$CATALOG_KEY" || { echo 'missing catalog signing secret' >&2; exit 1; }
-          mkdir "$RUNNER_TEMP/catalog-v1"
-          cd "$RUNNER_TEMP/catalog-v1"
+          mkdir "$RUNNER_TEMP/state" && cd "$RUNNER_TEMP/state"
           gh release list --repo "$GITHUB_REPOSITORY" --limit 1000 --json tagName > releases.json
-          python -c 'import json; assert len(json.load(open("releases.json"))) < 1000, "release list truncated"'
-          if python -c 'import json,sys; sys.exit(0 if any(x["tagName"] == "catalog-v1" for x in json.load(open("releases.json"))) else 1)'; then
+          python -I -c 'import json; assert len(json.load(open("releases.json"))) < 1000, "release list truncated"'
+          if python -I -c 'import json,sys; sys.exit(0 if any(x["tagName"] == "catalog-v1" for x in json.load(open("releases.json"))) else 1)'; then
+            # 固定基线下载到本 job 专属目录；sign job 一律重新实时下载，不信任
+            # artifact 里的基线副本（它只用于 verify 侧序列预判，不是签名依据）。
             gh release download catalog-v1 --repo "$GITHUB_REPOSITORY" --pattern 'catalog.json*' --dir previous
-            minisign -Vm previous/catalog.json -x previous/catalog.json.minisig -p "$GITHUB_WORKSPACE/catalog/publisher.pub"
-            sequence=$(python "$GITHUB_WORKSPACE/marketplace/publication_v1.py" --releases releases.json --fixed previous/catalog.json)
-            previous_sequence=$((sequence - 1))
-            gh release download "catalog-v1-$previous_sequence" --repo "$GITHUB_REPOSITORY" --pattern 'catalog.json*' --dir previous-snapshot
-            cmp previous/catalog.json previous-snapshot/catalog.json
-            cmp previous/catalog.json.minisig previous-snapshot/catalog.json.minisig
-            fixed_exists=true
+            echo present > fixed-state.txt
+            echo false > bootstrap-state.txt
           else
-            bootstrap_arg=()
-            [[ "$BOOTSTRAP" != true ]] || bootstrap_arg=(--bootstrap)
-            sequence=$(python "$GITHUB_WORKSPACE/marketplace/publication_v1.py" --releases releases.json "${bootstrap_arg[@]}")
-            fixed_exists=false
+            echo absent > fixed-state.txt
+            # 首发许可必须同时满足：管理员显式配置 KERMINAL_CATALOG_BOOTSTRAP=true，
+            # 且同轨没有任何历史不可变快照。固定目录消失但快照仍在属于中断或
+            # 破坏状态，必须人工恢复，不能当成「重新首发」自动引导。
+            python -I - <<'PY'
+          import json, re, sys
+          releases = json.load(open('releases.json'))
+          snapshots = [r['tagName'] for r in releases if re.fullmatch(r'catalog-v1-[1-9][0-9]*', r['tagName'])]
+          if snapshots:
+              print('fixed catalog is missing but immutable snapshots exist; refusing to bootstrap', file=sys.stderr)
+              sys.exit(1)
+          PY
+            if [[ "$BOOTSTRAP_LICENSE" == true ]]; then
+              echo true > bootstrap-state.txt
+            else
+              echo 'fixed catalog is absent and KERMINAL_CATALOG_BOOTSTRAP is not true; refusing first publication' >&2
+              exit 1
+            fi
           fi
-          python "$GITHUB_WORKSPACE/marketplace/catalog-v1.py" --tool "$RUNNER_TEMP/tool/bin/kerminal-plugin" --sequence "$sequence" --output catalog.json --media-dir media
-          if [[ "$fixed_exists" == true ]]; then
-            python "$GITHUB_WORKSPACE/marketplace/publication_v1.py" --releases releases.json --fixed previous/catalog.json --candidate catalog.json
+          # 冻结的首发决定随 publication-state 传给 sign：sign 侧不重新推断
+          # 「目录为空就引导」，只按这份决定执行并在远端状态上复核。
+          echo "bootstrap=$(cat bootstrap-state.txt)"
+      - name: Compute sequence and generate verified candidate
+        if: steps.entries.outputs.published == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # 有固定基线时先验签再参与序列计算：签名不成立或序列断档都直接失败。
+          fixed_args=()
+          if test "$(cat "$RUNNER_TEMP/state/fixed-state.txt")" = present; then
+            minisign -Vm "$RUNNER_TEMP/state/previous/catalog.json" -x "$RUNNER_TEMP/state/previous/catalog.json.minisig" -p "$GITHUB_WORKSPACE/trusted/catalog/v1-publisher.pub"
+            fixed_args=(--fixed "$RUNNER_TEMP/state/previous/catalog.json" --fixed-sig "$RUNNER_TEMP/state/previous/catalog.json.minisig" --pubkey "$GITHUB_WORKSPACE/trusted/catalog/v1-publisher.pub")
+          else
+            # 无基线时只消费上一阶段冻结的许可决定：bootstrap-state.txt 为 true
+            # 才传 --bootstrap，任何其它内容都拒绝，避免「目录为空就自动引导」。
+            test "$(cat "$RUNNER_TEMP/state/bootstrap-state.txt")" = true || { echo 'bootstrap decision was not licensed; refusing to generate' >&2; exit 1; }
+            fixed_args=(--bootstrap)
           fi
+          SEQUENCE=$(python -I trusted/marketplace/trusted_publish_v1.py sequence --releases "$RUNNER_TEMP/state/releases.json" "${fixed_args[@]}")
+          echo "next sequence: $SEQUENCE"
+          # 生成在无密钥 job 完成：资产下载、摘要、清单校验与媒体镜像全部由
+          # 钉住检出中的受信代码执行，数据根指向候选检出；产出目录含候选
+          # catalog.json 与绑定输入的 receipt.json。空媒体是合法产出：镜像器
+          # 对无图标且无 README 首图的登记不产出任何文件，out/media 目录保持
+          # 存在且为空，随单 artifact 原样传递，sign 侧不因「无媒体」拒绝。
+          python -I trusted/marketplace/trusted_publish_v1.py generate \
+            --data-root candidate \
+            --tool "$RUNNER_TEMP/tool/bin/kerminal-plugin" \
+            --sequence "$SEQUENCE" \
+            --output-dir "$RUNNER_TEMP/out"
+      # 产物合并为单 artifact（catalog + receipt + media 目录原样，空目录也在
+      # 内）：避免按名称拆分后「合法零媒体」在 upload/download 的
+      # if-no-files-found 或通配路径处被误拒；安全校验不放松——sign 侧逐字节
+      # 重放回执清单，媒体多出、缺失或换内容都会在拿到密钥前失败。
+      - name: Upload verified bundle
+        if: steps.entries.outputs.published == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: verified-bundle
+          path: ${{ runner.temp }}/out/
+          if-no-files-found: error
+      - name: Upload publication state
+        if: steps.entries.outputs.published == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: publication-state
+          path: ${{ runner.temp }}/state
+          if-no-files-found: error
+
+  sign:
+    name: Sign and publish from protected environment
+    needs: verify
+    if: needs.verify.outputs.published == 'true'
+    # 外部前提：此 environment 应配置 required reviewers 与受保护分支策略，
+    # 且签名密钥只保存在该 environment 的 secret 里（不进仓库级 secret）；
+    # 审批在代码之外完成，人工批准不可被回执或摘要替代。环境策略未配置时
+    # GitHub 仍可能直接运行本 job，即缺审批不缺执行——这正是必须先在仓库外
+    # 配好环境的原因，本文件只能拒绝继续，不能替 GitHub 强制审批。
+    environment: catalog-signer
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      # 签名路径独立再拒绝一次非 main：verify 的门禁只覆盖它自己的 job，签名
+      # 步骤不把「上游已经检查过」当作唯一依据，避免将来 job 拆分或复用
+      # workflow 时绕过仓库内门禁。
+      - name: Require main branch
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_REF: ${{ github.ref }}
+        run: |
+          [[ "$EVENT_NAME" == "push" || "$EVENT_NAME" == "workflow_dispatch" ]] || { echo 'unsupported trigger' >&2; exit 1; }
+          [[ "$EVENT_REF" == "refs/heads/main" ]] || { echo 'refusing to verify or sign outside refs/heads/main' >&2; exit 1; }
+      - uses: actions/checkout@v4
+        with:
+          # 只消费 verify 冻结的完整 SHA，不再读同名变量：环境变量在两次 job
+          # 之间被改动时，签名仍针对已被 verify 校验过的同一个受审提交。
+          ref: ${{ needs.verify.outputs.signer_sha }}
+          path: trusted
+          persist-credentials: false
+      # 检出后按实际 HEAD 复核：ref 解析偏差或缓存命中都不能让受信代码来源
+      # 偏离 verify 冻结的提交。
+      - name: Verify signer checkout matches the frozen SHA
+        env:
+          EXPECTED_SHA: ${{ needs.verify.outputs.signer_sha }}
+        run: |
+          actual=$(git -C trusted rev-parse HEAD)
+          [[ "$actual" == "$EXPECTED_SHA" ]] || { echo "trusted checkout HEAD $actual does not match the frozen signer SHA $EXPECTED_SHA" >&2; exit 1; }
+      # sign 是独立 runner，不能沿用 verify 工作树的公钥；要在加载密钥和任何
+      # 签名/回读调用之前确认 v1 专用受信公钥已随钉住检出就位，缺文件直接
+      # fail-closed，而不是让 minisign 在发布中途报错留下半成品。
+      - name: Require v1 trusted public key
+        run: |
+          key="$GITHUB_WORKSPACE/trusted/catalog/v1-publisher.pub"
+          test -s "$key" || { echo 'missing trusted v1 publisher key: catalog/v1-publisher.pub' >&2; exit 1; }
+      - uses: actions/checkout@v4
+        with:
+          path: candidate
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install minisign
+        run: 'sudo apt-get update && sudo apt-get install -y minisign'
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      # artifact 布局：verified-bundle/catalog.json、verified-bundle/receipt.json、
+      # verified-bundle/media/[内容寻址文件]、publication-state/*。
+      # upload-artifact v4 不保留空目录，因此合法零媒体时下载回来的 bundle 里
+      # 没有 media 目录：这里无条件新建空目录，只在 bundle 带 media 时才拷贝。
+      # 媒体「应该有却缺失」仍由受信 plan 拿 receipt.media_manifest 逐字节比对
+      # 拒绝，恢复空目录不会放松任何安全校验。
+      # staging 在固定路径（$GITHUB_WORKSPACE 下）展开，后续步骤全部用绝对
+      # 工作区路径引用，不再依赖「某一步 cd 过哪里」。
+      - name: Stage verified inputs
+        run: |
+          set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/out/media" "$GITHUB_WORKSPACE/state"
+          cp artifacts/verified-bundle/catalog.json "$GITHUB_WORKSPACE/out/catalog.json"
+          cp artifacts/verified-bundle/receipt.json "$GITHUB_WORKSPACE/out/receipt.json"
+          if [[ -d artifacts/verified-bundle/media ]]; then
+            cp -r artifacts/verified-bundle/media/. "$GITHUB_WORKSPACE/out/media/"
+          fi
+          cp -r artifacts/publication-state/. "$GITHUB_WORKSPACE/state/"
+          # plan 前的物证清点：候选、回执、媒体目录（允许为空但不允许缺失）
+          # 必须真的落盘，任何缺失都在加载密钥之前失败。
+          test -f "$GITHUB_WORKSPACE/out/catalog.json"
+          test -f "$GITHUB_WORKSPACE/out/receipt.json"
+          test -d "$GITHUB_WORKSPACE/out/media"
+      - name: Compute sign plan before any secret is loaded
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REPOSITORY" == "kongweiguang/Kerminal-Plugins" ]] || { echo 'refusing to publish from unexpected repository' >&2; exit 1; }
+          test -f state/releases.json
+          # plan 在加载任何密钥之前运行：重放候选/媒体/登记摘要绑定、结构契约、
+          # 登记绑定、序列衔接与历史不可变；任何一项不一致都在拿到密钥前失败。
+          # 序列基于本 job 现查的 release 列表重算，verify 与 sign 之间发布状态
+          # 漂移立即失败。
+          gh release list --repo "$GITHUB_REPOSITORY" --limit 1000 --json tagName > state/releases-sign.json
+          python -I -c 'import json; assert len(json.load(open("state/releases-sign.json"))) < 1000, "release list truncated"'
+          # 固定基线一律下载到本步骤新建的 live 目录：绝不写回 artifact 附带的
+          # state/previous（那份只代表 verify 时点的基线，被覆盖会同时污染回读
+          # 依据与诊断材料）。下载后再验签，签名不成立立即失败。
+          if test -f state/fixed-state.txt && test "$(cat state/fixed-state.txt)" = present; then
+            # 固定目录存在时 verify 必须冻结为「非首发」：两份状态文件互相矛盾
+            # 说明 artifact 被改动或状态错乱，在加载密钥前失败。
+            test "$(cat state/bootstrap-state.txt)" = false || { echo 'fixed catalog present but bootstrap was licensed; refusing inconsistent state' >&2; exit 1; }
+            mkdir -p state/previous-live
+            gh release download catalog-v1 --repo "$GITHUB_REPOSITORY" --pattern 'catalog.json*' --dir state/previous-live
+            minisign -Vm state/previous-live/catalog.json -x state/previous-live/catalog.json.minisig -p trusted/catalog/v1-publisher.pub
+            # 固定目录必须与它对应的不可变快照绑定同一份 catalog 原文：只比较
+            # sequence 无法发现「固定目录被换成另一份同序列目录」。快照标签由
+            # 已验签基线序列推导，下载后先逐字节比对目录原文，再各自验签（签名
+            # 字节不做相等要求：历史目录可能由不同签名材料产出，验签成立即可）。
+            baseline_sequence=$(python -I -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["sequence"])' state/previous-live/catalog.json)
+            snapshot_tag="catalog-v1-$baseline_sequence"
+            mkdir -p state/snapshot-live
+            gh release download "$snapshot_tag" --repo "$GITHUB_REPOSITORY" --pattern 'catalog.json*' --dir state/snapshot-live
+            cmp state/previous-live/catalog.json state/snapshot-live/catalog.json
+            minisign -Vm state/snapshot-live/catalog.json -x state/snapshot-live/catalog.json.minisig -p trusted/catalog/v1-publisher.pub
+            python -I trusted/marketplace/trusted_publish_v1.py plan \
+              --receipt out/receipt.json \
+              --candidate out/catalog.json \
+              --media-dir out/media \
+              --data-root candidate \
+              --releases state/releases-sign.json \
+              --fixed state/previous-live/catalog.json \
+              --fixed-sig state/previous-live/catalog.json.minisig \
+              --pubkey trusted/catalog/v1-publisher.pub | tee plan.json
+          else
+            # 首发只按 verify 冻结的决定执行：没有 bootstrap-state.txt=true 就
+            # 拒绝，不在 sign 侧重演「固定目录缺失即首发」的推断。受信 plan 的
+            # 严格轨道入口还会基于本 job 现查的 release 列表再次拒绝「已有同轨
+            # 快照却声明 bootstrap」，因此基线消失或常规增量不会被误当首发。
+            test "$(cat state/bootstrap-state.txt)" = true || { echo 'bootstrap decision was not licensed; refusing to sign a first publication' >&2; exit 1; }
+            python -I trusted/marketplace/trusted_publish_v1.py plan \
+              --receipt out/receipt.json \
+              --candidate out/catalog.json \
+              --media-dir out/media \
+              --data-root candidate \
+              --releases state/releases-sign.json \
+              --bootstrap | tee plan.json
+          fi
+          # 计划自检：plan.json 的 candidate_sha256 必须等于即将交给 minisign 的
+          # 候选原文摘要。plan 通过不等于签名目标正确——这里把「计划」与「磁盘
+          # 上这份文件」直接绑定，防止计划产出后被并发替换或读错路径。
+          python -I - <<'PY'
+          import hashlib, json, sys
+          plan = json.load(open('plan.json', encoding='utf-8'))
+          candidate = open('out/catalog.json', 'rb').read()
+          digest = hashlib.sha256(candidate).hexdigest()
+          if digest != plan['candidate_sha256']:
+              print('plan candidate digest does not match the file to be signed', file=sys.stderr)
+              sys.exit(1)
+          if plan['sequence'] < 1:
+              print('plan sequence is not a positive integer', file=sys.stderr)
+              sys.exit(1)
+          # 首发决定必须与 verify 冻结的状态一致：plan 自己声明 bootstrap 而
+          # 冻结状态说「非首发」（或反之）都拒绝，防止计划与状态被分别替换。
+          # 状态文件缺失同样是异常 artifact，按失败处理并给出可读诊断。
+          try:
+              frozen = open('state/bootstrap-state.txt', encoding='utf-8').read().strip()
+          except OSError:
+              print('frozen publication state is missing', file=sys.stderr)
+              sys.exit(1)
+          if frozen not in ('true', 'false') or plan['bootstrap'] is not (frozen == 'true'):
+              print('plan bootstrap decision does not match the frozen publication state', file=sys.stderr)
+              sys.exit(1)
+          names = plan['media']
+          if not isinstance(names, list) or len(set(names)) != len(names):
+              print('plan media list is not a duplicate-free list', file=sys.stderr)
+              sys.exit(1)
+          for name in names:
+              path = f'out/media/{name}'
+              try:
+                  data = open(path, 'rb').read()
+              except OSError:
+                  print(f'planned media asset is missing on disk: {name}', file=sys.stderr)
+                  sys.exit(1)
+              if hashlib.sha256(data).hexdigest() != name.split('.')[0].split('-', 1)[1]:
+                  print(f'planned media asset bytes do not match its content-addressed name: {name}', file=sys.stderr)
+                  sys.exit(1)
+          print('plan digest and media set verified before signing')
+          PY
+      - name: Sign catalog and publish releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CATALOG_KEY: ${{ secrets.KERMINAL_CATALOG_MINISIGN_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$CATALOG_KEY" || { echo 'missing catalog signing secret' >&2; exit 1; }
+          test -f "$GITHUB_WORKSPACE/plan.json"
+          # 签名密钥只在本步骤进入环境；plan 通过后这里才读它。umask + trap
+          # 限制密钥文件暴露面；密钥不写入日志。所有路径用绝对工作区路径，
+          # 消除旧版「cd out 之后 plan.json 相对路径错位」的问题。
           umask 077
-          printf '%s\n' "$CATALOG_KEY" > signing.key
+          printf '%s\n' "$CATALOG_KEY" > "$GITHUB_WORKSPACE/signing.key"
           unset CATALOG_KEY
-          trap 'rm -f signing.key' EXIT
-          minisign -Sm catalog.json -s signing.key -x catalog.json.minisig
-          minisign -Vm catalog.json -x catalog.json.minisig -p "$GITHUB_WORKSPACE/catalog/publisher.pub"
-          tag="catalog-v1-$sequence"
-          gh release create "$tag" --repo "$GITHUB_REPOSITORY" --draft --title "$tag" --notes 'Signed Kerminal plugin catalog' catalog.json catalog.json.minisig media/*
-          mkdir readback
-          gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern 'catalog.json*' --dir readback
-          cmp catalog.json readback/catalog.json
-          cmp catalog.json.minisig readback/catalog.json.minisig
-          gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern 'media-*' --dir readback
-          for asset in media/*; do cmp "$asset" "readback/$(basename "$asset")"; done
+          trap 'rm -f "$GITHUB_WORKSPACE/signing.key"' EXIT
+          # 签名前最后一次核对：要签的字节就是 plan 绑定的那份候选原文。三步
+          # （读盘→比对计划摘要→交给 minisign）之间仍存在理论并发窗口，无法
+          # 用 shell 闭环；它叠加在 GitHub 权限与 runner 隔离这个前提之上，
+          # 如实声明，不承诺比 API 更强的原子性。
+          python -I - "$GITHUB_WORKSPACE" <<'PY'
+          import hashlib, json, sys
+          workspace = sys.argv[1]
+          plan = json.load(open(workspace + '/plan.json', encoding='utf-8'))
+          candidate = open(workspace + '/out/catalog.json', 'rb').read()
+          if hashlib.sha256(candidate).hexdigest() != plan['candidate_sha256']:
+              print('candidate changed after plan was computed; refusing to sign', file=sys.stderr)
+              sys.exit(1)
+          # 首发决定同样在签名前复核：plan.json 在 plan 与 sign 两步之间可被
+          # 替换，若只信 plan 自己的 bootstrap 字段，就可能把冻结为「非首发」
+          # 的发布改写成创建固定目录。这里与 verify 冻结状态逐值比对。
+          frozen = open(workspace + '/state/bootstrap-state.txt', encoding='utf-8').read().strip()
+          if frozen not in ('true', 'false') or plan['bootstrap'] is not (frozen == 'true'):
+              print('plan bootstrap decision does not match the frozen publication state; refusing to sign', file=sys.stderr)
+              sys.exit(1)
+          # 计划的首发声明还必须与 verify 记录的固定目录状态一致：声明首发却
+          # 记录着固定目录存在（或反之）时，后续「创建/更新固定目录」会走错
+          # 分支，必须在签名前拒绝。
+          fixed_state = open(workspace + '/state/fixed-state.txt', encoding='utf-8').read().strip()
+          expected_fixed = 'absent' if plan['bootstrap'] else 'present'
+          if fixed_state != expected_fixed:
+              print('plan bootstrap decision does not match the recorded fixed catalog state; refusing to sign', file=sys.stderr)
+              sys.exit(1)
+          PY
+          minisign -Sm "$GITHUB_WORKSPACE/out/catalog.json" -s "$GITHUB_WORKSPACE/signing.key" -x "$GITHUB_WORKSPACE/out/catalog.json.minisig"
+          # 签名后立即对同一份候选原文复核验签：确认签名确实覆盖计划绑定的字节。
+          minisign -Vm "$GITHUB_WORKSPACE/out/catalog.json" -x "$GITHUB_WORKSPACE/out/catalog.json.minisig" -p "$GITHUB_WORKSPACE/trusted/catalog/v1-publisher.pub"
+          tag="catalog-v1-$(python -I -c 'import json,sys; print(json.load(open(sys.argv[1] + "/plan.json"))["sequence"])' "$GITHUB_WORKSPACE")"
+          bootstrap=$(python -I -c 'import json,sys; print(str(json.load(open(sys.argv[1] + "/plan.json"))["bootstrap"]).lower())' "$GITHUB_WORKSPACE")
+          # 计划里的媒体集合按文件名逐个上传，不用 media/* 通配：合法零媒体
+          # 场景不再有「空通配展开成错误参数」的风险；计划之外的文件也不会
+          # 被顺带发布。计划媒体在 plan 自检中已逐字节核对过。资产一律用
+          # 绝对路径传给 gh：gh 不跟随 shell 的 cd 语义做基准备。
+          args=("$GITHUB_WORKSPACE/out/catalog.json" "$GITHUB_WORKSPACE/out/catalog.json.minisig")
+          for media in $(python -I -c 'import json,sys; print(" ".join(json.load(open(sys.argv[1] + "/plan.json"))["media"]))' "$GITHUB_WORKSPACE"); do
+            test -f "out/media/$media" || { echo "missing planned media asset: $media" >&2; exit 1; }
+            args+=("$GITHUB_WORKSPACE/out/media/$media")
+          done
+          gh release create "$tag" --repo "$GITHUB_REPOSITORY" --draft --title "$tag" --notes 'Signed Kerminal plugin catalog' "${args[@]}"
+          # 恢复语义：draft → 回读逐字节比对 → 正式 → 固定目录更新 → 回读验签。
+          # 任一步失败立即退出：留下的 draft 由人工处理，绝不自动删除或重建。
+          mkdir "$GITHUB_WORKSPACE/readback"
+          gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern 'catalog.json*' --dir "$GITHUB_WORKSPACE/readback"
+          cmp "$GITHUB_WORKSPACE/out/catalog.json" "$GITHUB_WORKSPACE/readback/catalog.json"
+          cmp "$GITHUB_WORKSPACE/out/catalog.json.minisig" "$GITHUB_WORKSPACE/readback/catalog.json.minisig"
+          # 快照媒体回读：无论 bootstrap 还是增量，都按计划清单逐个下载比对。
+          # 首次引导同样可能有媒体，跳过会把「远端媒体丢失或被替换」漏掉；
+          # 零媒体时循环不执行，目录保持为空，不产生任何下载调用。
+          mkdir "$GITHUB_WORKSPACE/readback-media"
+          for media in $(python -I -c 'import json,sys; print(" ".join(json.load(open(sys.argv[1] + "/plan.json"))["media"]))' "$GITHUB_WORKSPACE"); do
+            gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern "$media" --dir "$GITHUB_WORKSPACE/readback-media"
+            cmp "$GITHUB_WORKSPACE/out/media/$media" "$GITHUB_WORKSPACE/readback-media/$media"
+          done
+          # 固定 tag 正常前进的前置校验已在 plan 完成（基线验签 + 序列衔接）；
+          # 此处若同名快照或固定目录状态异常，gh 会失败并整体退出。
           gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false --latest=false
-          if [[ "$fixed_exists" == false ]]; then
-            gh release create catalog-v1 --repo "$GITHUB_REPOSITORY" --draft --title 'Kerminal plugin catalog' --notes 'Signed current catalog' catalog.json catalog.json.minisig
+          if [[ "$bootstrap" == true ]]; then
+            gh release create catalog-v1 --repo "$GITHUB_REPOSITORY" --draft --title 'Kerminal plugin catalog' --notes 'Signed current catalog' "$GITHUB_WORKSPACE/out/catalog.json" "$GITHUB_WORKSPACE/out/catalog.json.minisig"
           else
-            gh release upload catalog-v1 --repo "$GITHUB_REPOSITORY" --clobber catalog.json catalog.json.minisig
+            # 固定目录更新前的核对必须基于「此刻的远端」：plan 步骤下载的
+            # previous-live 只代表 plan 时点，之后远端被并发推进时本地副本不会
+            # 自己变化。因此这里重新下载到独立目录 previous-guard，验签后与
+            # plan 基线逐字节对照，再确认它仍是候选的前一序列；任何不一致都
+            # 拒绝替换固定目录并进入人工恢复。
+            # 诚实边界：这一步与随后的 --clobber 上传之间仍无原子比较并交换
+            # （GitHub API 不提供 CAS），窗口内的并发写入无法由本工作流排除；
+            # 常规漂移会被拦下，不承诺多文件发布原子性。
+            mkdir -p "$GITHUB_WORKSPACE/state/previous-guard"
+            gh release download catalog-v1 --repo "$GITHUB_REPOSITORY" --pattern 'catalog.json*' --dir "$GITHUB_WORKSPACE/state/previous-guard"
+            minisign -Vm "$GITHUB_WORKSPACE/state/previous-guard/catalog.json" -x "$GITHUB_WORKSPACE/state/previous-guard/catalog.json.minisig" -p "$GITHUB_WORKSPACE/trusted/catalog/v1-publisher.pub"
+            cmp "$GITHUB_WORKSPACE/state/previous-live/catalog.json" "$GITHUB_WORKSPACE/state/previous-guard/catalog.json"
+            # 注意：heredoc 结束符必须在 run 块的基础缩进上（剥层后顶格），
+            # 因为普通 <<（非 <<-）不剥离前导空白。
+            python -I - "$GITHUB_WORKSPACE" <<'PY'
+          import json, sys
+          workspace = sys.argv[1]
+          plan = json.load(open(workspace + '/plan.json', encoding='utf-8'))
+          guard = json.load(open(workspace + '/state/previous-guard/catalog.json', encoding='utf-8'))
+          if guard.get('sequence') != plan['sequence'] - 1:
+              print('live baseline no longer matches the planned predecessor; refusing to replace the fixed catalog', file=sys.stderr)
+              sys.exit(1)
+          PY
+            gh release upload catalog-v1 --repo "$GITHUB_REPOSITORY" --clobber "$GITHUB_WORKSPACE/out/catalog.json" "$GITHUB_WORKSPACE/out/catalog.json.minisig"
           fi
-          mkdir fixed-readback
-          gh release download catalog-v1 --repo "$GITHUB_REPOSITORY" --pattern 'catalog.json*' --dir fixed-readback
-          cmp catalog.json fixed-readback/catalog.json
-          cmp catalog.json.minisig fixed-readback/catalog.json.minisig
-          minisign -Vm fixed-readback/catalog.json -x fixed-readback/catalog.json.minisig -p "$GITHUB_WORKSPACE/catalog/publisher.pub"
+          mkdir "$GITHUB_WORKSPACE/fixed-readback"
+          gh release download catalog-v1 --repo "$GITHUB_REPOSITORY" --pattern 'catalog.json*' --dir "$GITHUB_WORKSPACE/fixed-readback"
+          cmp "$GITHUB_WORKSPACE/out/catalog.json" "$GITHUB_WORKSPACE/fixed-readback/catalog.json"
+          cmp "$GITHUB_WORKSPACE/out/catalog.json.minisig" "$GITHUB_WORKSPACE/fixed-readback/catalog.json.minisig"
+          minisign -Vm "$GITHUB_WORKSPACE/fixed-readback/catalog.json" -x "$GITHUB_WORKSPACE/fixed-readback/catalog.json.minisig" -p "$GITHUB_WORKSPACE/trusted/catalog/v1-publisher.pub"
           fixed_draft=$(gh release view catalog-v1 --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')
           if [[ "$fixed_draft" == true ]]; then
             gh release edit catalog-v1 --repo "$GITHUB_REPOSITORY" --draft=false --latest=false

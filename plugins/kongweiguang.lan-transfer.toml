@@ -1,0 +1,9 @@
+# @author kongweiguang
+# 从首个通过四平台内容一致性验证的 Release 开始登记，不回填图标不一致的 v0.1.0。
+status = "published"
+repository = "https://github.com/kongweiguang/kerminal-plugin-lan-transfer"
+categories = ["network"]
+
+[[versions]]
+version = "0.1.1"
+tag = "v0.1.1"

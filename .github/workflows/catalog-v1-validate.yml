@@ -2,7 +2,15 @@
 name: Validate marketplace v1
 on:
   pull_request:
-    paths: ['plugins/**', 'categories.toml', 'marketplace/catalog-v1.py', 'marketplace/media_v1.py', 'marketplace/publication_v1.py', 'marketplace/tests/**', '.github/workflows/catalog-v1-validate.yml']
+    paths:
+      # 验证依赖整个 marketplace 目录：逐个列文件会漏掉新增辅助模块（如 catalog_v2_assets.py、legacy_projection.py）及其测试。
+      - 'marketplace/**'
+      - 'plugins/**'
+      - 'categories.toml'
+      # 发布工作流与目录公钥决定验证/发布口径，改动时也要走只读 PR 验证（不代表公钥验签已覆盖）。
+      - '.github/workflows/catalog-v1-validate.yml'
+      - '.github/workflows/catalog-v1-publish.yml'
+      - 'catalog/v1-publisher.pub'
   workflow_dispatch:
 permissions:
   contents: read
@@ -10,20 +18,32 @@ jobs:
   validate:
     runs-on: ubuntu-22.04
     steps:
+      # workflow_dispatch 允许选任意分支触发；本 job 只做只读验证，但仍拒绝
+      # 在非 main 分支上手动运行，避免「验证过」被误读为发布候选已审。PR
+      # 验证走 pull_request 事件（refs/pull/*），不受此门禁影响。
+      - name: Require main branch for manual runs
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          EVENT_REF: ${{ github.ref }}
+        run: '[[ "$EVENT_REF" == "refs/heads/main" ]] || { echo "manual validation is only allowed on refs/heads/main" >&2; exit 1; }'
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      # 工作流测试用真实 YAML 解析器（PyYAML），它不是 setup-python 自带依赖：
+      # 固定精确版本显式安装，避免在真实 runner 上因缺依赖而整体报错或静默跳过。
+      - name: Install pinned test dependencies
+        run: python -m pip install --disable-pip-version-check --no-input 'PyYAML==6.0.2'
       - name: Validate registrations and tests
         run: |
           python marketplace/catalog-v1.py --metadata-only
-          python -m unittest discover -s marketplace/tests -p 'test_catalog_v1.py'
+          python -m unittest discover -s marketplace/tests -p 'test_*.py'
       - name: Detect published entries
         id: entries
         run: |
-          python - <<'PY'
+          python -I - <<'PY'
           import importlib.util, os, sys
           sys.path.insert(0, 'marketplace')
           spec = importlib.util.spec_from_file_location('catalog', 'marketplace/catalog-v1.py')
@@ -63,9 +83,9 @@ jobs:
           mkdir "$RUNNER_TEMP/catalog-check"
           cd "$RUNNER_TEMP/catalog-check"
           gh release list --repo kongweiguang/Kerminal-Plugins --limit 1000 --json tagName > releases.json
-          if python -c 'import json,sys; sys.exit(0 if any(x["tagName"] == "catalog-v1" for x in json.load(open("releases.json"))) else 1)'; then
+          if python -I -c 'import json,sys; sys.exit(0 if any(x["tagName"] == "catalog-v1" for x in json.load(open("releases.json"))) else 1)'; then
             gh release download catalog-v1 --repo kongweiguang/Kerminal-Plugins --pattern 'catalog.json*' --dir previous
-            minisign -Vm previous/catalog.json -x previous/catalog.json.minisig -p "$GITHUB_WORKSPACE/catalog/publisher.pub"
+            minisign -Vm previous/catalog.json -x previous/catalog.json.minisig -p "$GITHUB_WORKSPACE/catalog/v1-publisher.pub"
             sequence=$(python "$GITHUB_WORKSPACE/marketplace/publication_v1.py" --releases releases.json --fixed previous/catalog.json)
             fixed_exists=true
           else
